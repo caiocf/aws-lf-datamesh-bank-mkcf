@@ -23,48 +23,35 @@ Domínios incluídos:
 ```mermaid
 flowchart TB
   subgraph AWS["Conta AWS única - simulação multi-account por módulos e IAM roles"]
-    subgraph HUB["Governança / Hub"]
-      LF["AWS Lake Formation"]
-      TAGS["LF-Tags"]
-      ATHENA["Athena Workgroups"]
-      ROLES["Consumer Roles"]
+
+    subgraph GOV["Conta de Governança"]
+      LF["AWS Lake Formation\n(Data Lake Administrator)"]
+      TAGS["LF-Tags corporativas\ndomain | layer | classification\npii | environment | data_product | owner"]
+      ATHENA["Athena Workgroups\npor persona"]
     end
 
-    subgraph PRODUCERS["Domínios produtores / Spokes"]
-      CLIENTES["clientes: S3 + Glue DB + Table + LF grants"]
-      CONTAS["contas: S3 + Glue DB + Table + LF grants"]
-      TRANS["transacoes: S3 + Glue DB + Table + LF grants"]
-      PARC["parceiros: S3 + Glue DB + Table + LF grants"]
-      ALERTAS["alertas: S3 + Glue DB + Table + LF grants"]
+    subgraph PROD["Contas Produtoras / Domínios"]
+      CLIENTES["Domínio: clientes\nS3 bronze → silver → gold\nGlue Catalog + LF grants\nData Cells Filters"]
+      CONTAS["Domínio: contas\nS3 bronze → silver → gold\nGlue Catalog + LF grants\nData Cells Filters"]
+      TRANS["Domínio: transacoes\nS3 bronze → silver → gold\nGlue Catalog + LF grants\nData Cells Filters"]
+      PARC["Domínio: parceiros\nS3 bronze → silver → gold\nGlue Catalog + LF grants\nData Cells Filters"]
+      ALERTAS["Domínio: alertas\nS3 bronze → silver • gold\nGlue Catalog + LF grants\nData Cells Filters"]
     end
 
-    subgraph CONSUMERS["Contas consumidoras simuladas"]
-      BI["consumer-bi role + Athena"]
-      DS["consumer-data-science role + Athena"]
-      DW["consumer-data-warehouse role + Athena"]
-      RISK["consumer-risco-fraude role + Athena"]
-      AUD["consumer-auditoria role + Athena"]
+    subgraph CONS["Contas Consumidoras"]
+      BI["BI\nconsumer-bi"]
+      DS["Data Science\nconsumer-data-science"]
+      DW["Data Warehouse\nconsumer-data-warehouse"]
+      RISK["Risco & Fraude\nconsumer-risco-fraude"]
+      AUD["Auditoria\nconsumer-auditoria"]
     end
+
   end
 
-  LF --> TAGS
-  TAGS --> CLIENTES
-  TAGS --> CONTAS
-  TAGS --> TRANS
-  TAGS --> PARC
-  TAGS --> ALERTAS
-
-  CLIENTES --> LF
-  CONTAS --> LF
-  TRANS --> LF
-  PARC --> LF
-  ALERTAS --> LF
-
-  LF --> BI
-  LF --> DS
-  LF --> DW
-  LF --> RISK
-  LF --> AUD
+  TAGS -->|aplica tags| CLIENTES & CONTAS & TRANS & PARC & ALERTAS
+  CLIENTES & CONTAS & TRANS & PARC & ALERTAS -->|registra buckets\nconcede permissões| LF
+  LF -->|controla acesso\npor persona| BI & DS & DW & RISK & AUD
+  BI & DS & DW & RISK & AUD -->|consulta via| ATHENA
 ```
 
 ---
