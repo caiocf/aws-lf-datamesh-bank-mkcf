@@ -1,0 +1,35 @@
+aws_region   = "us-east-1"
+project_name = "lfmesh"
+environment  = "dev"
+
+# Recomendado: substitua pela ARN real do role ou user que executa Terraform.
+# Exemplo:
+# lakeformation_admin_arns = [
+#   "arn:aws:iam::NUMERO_CONTA:role/Admin"
+# ]
+lakeformation_admin_arns = []
+
+# Roles realistas de usuários e aplicações consumidoras
+# Execute primeiro: cd ../consumer-roles && terraform apply
+# Depois copie os ARNs do output para cá
+trusted_principal_arns = [
+  # Usuários simulados de contas consumidoras
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-user-ana-silva-bi",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-user-carlos-santos-ds",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-user-maria-costa-dw",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-user-pedro-oliveira-risk",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-user-lucia-ferreira-audit",
+  
+  # Aplicações simuladas de contas consumidoras
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-app-quicksight-prod",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-app-sagemaker-ml",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-app-redshift-dwh",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-app-fraud-detection-api",
+  "arn:aws:iam::NUMERO_CONTA:role/lfmesh-dev-app-compliance-reporter"
+]
+
+# OU para facilitar o lab, deixe vazio para usar root da conta
+# trusted_principal_arns = []
+
+# Se a conta já tiver Lake Formation configurado manualmente, coloque false.
+manage_data_lake_settings = true

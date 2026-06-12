@@ -1,0 +1,73 @@
+variable "project_name" {
+  description = "Nome curto do projeto."
+  type        = string
+  default     = "lfmesh"
+}
+
+variable "environment" {
+  description = "Ambiente lógico."
+  type        = string
+  default     = "dev"
+}
+
+variable "domain" {
+  description = "Nome do domínio: clientes, contas, transacoes, parceiros ou alertas."
+  type        = string
+}
+
+variable "owner" {
+  description = "Owner lógico do domínio."
+  type        = string
+}
+
+variable "consumer_role_arns" {
+  description = "Roles consumidoras que receberão DESCRIBE nos databases."
+  type        = list(string)
+  default     = []
+}
+
+variable "layers" {
+  description = "Camadas do domínio (bronze, silver, gold) com suas tabelas, grants e filtros."
+  type = map(object({
+    tables = map(object({
+      description    = optional(string, "")
+      s3_prefix      = optional(string)
+      columns = list(object({
+        name    = string
+        type    = string
+        comment = optional(string, "")
+      }))
+      sample_csv     = optional(string, "")
+      classification = optional(string, "internal")
+      pii            = optional(string, "no")
+      data_product   = optional(string)
+    }))
+
+    full_table_grants = optional(map(object({
+      table_name    = string
+      principal_arn = string
+    })), {})
+
+    data_filters = optional(map(object({
+      filter_name           = string
+      table_name            = string
+      principal_arn         = string
+      column_names          = optional(list(string))
+      excluded_column_names = optional(list(string), [])
+      row_filter_expression = optional(string, "")
+    })), {})
+  }))
+  default = {}
+}
+
+variable "create_sample_data" {
+  description = "Cria objetos CSV pequenos no S3 para validação com Athena."
+  type        = bool
+  default     = true
+}
+
+variable "tags" {
+  description = "Tags adicionais."
+  type        = map(string)
+  default     = {}
+}
