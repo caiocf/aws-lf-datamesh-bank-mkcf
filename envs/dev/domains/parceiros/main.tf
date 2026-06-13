@@ -28,6 +28,8 @@ data "aws_iam_role" "consumer" {
   name     = each.value
 }
 
+data "aws_caller_identity" "current" {}
+
 module "domain" {
   source = "../../../../modules/domain"
 
@@ -36,28 +38,39 @@ module "domain" {
   domain             = "parceiros"
   owner              = "equipe-parceiros"
   consumer_role_arns = [for role in data.aws_iam_role.consumer : role.arn]
+  create_sample_data = false
 
   layers = {
     bronze = {
       tables = {
         parceiros_raw = {
-          description    = "Dados brutos de parceiros."
+          description    = "Dados brutos de parceiros ingeridos da API."
+          format         = "parquet"
           classification = "internal"
           pii            = "no"
           columns = [
             { name = "parceiro_id",     type = "string" },
             { name = "nome_parceiro",   type = "string" },
             { name = "categoria",       type = "string" },
-            { name = "pais",            type = "string" },
-            { name = "contrato_status", type = "string" },
-            { name = "dt_ingest",       type = "string" }
+            { name = "contrato_status", type = "string" }
           ]
-          sample_csv = <<EOT
-parceiro_id,nome_parceiro,categoria,pais,contrato_status,dt_ingest
-p001,Parceiro Pagamentos,pagamentos,BR,ativo,2026-01-10
-p002,Parceiro Antifraude,risco,BR,ativo,2026-01-10
-p003,Parceiro Global,dados,US,ativo,2026-01-10
-EOT
+          partition_keys = [
+            { name = "pais",      type = "string" },
+            { name = "dt_ingest", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"              = "injected"
+              "projection.dt_ingest.type"         = "date"
+              "projection.dt_ingest.format"       = "yyyy-MM-dd"
+              "projection.dt_ingest.range"        = "2026-01-01,NOW"
+              "projection.dt_ingest.interval"     = "1"
+              "projection.dt_ingest.interval.unit" = "DAYS"
+              "storage.location.template"         = "s3://lfmesh-dev-parceiros-bronze-${data.aws_caller_identity.current.account_id}/parceiros_raw/pais=$${pais}/dt_ingest=$${dt_ingest}/"
+            }
+          }
+          sample_csv = ""
         }
       }
       full_table_grants = {}
@@ -67,22 +80,27 @@ EOT
     silver = {
       tables = {
         parceiros = {
-          description    = "Parceiros padronizados."
+          description    = "Parceiros deduplicados — última versão por parceiro_id."
+          format         = "parquet"
           classification = "internal"
           pii            = "no"
           columns = [
             { name = "parceiro_id",     type = "string" },
             { name = "nome_parceiro",   type = "string" },
             { name = "categoria",       type = "string" },
-            { name = "pais",            type = "string" },
             { name = "contrato_status", type = "string" }
           ]
-          sample_csv = <<EOT
-parceiro_id,nome_parceiro,categoria,pais,contrato_status
-p001,Parceiro Pagamentos,pagamentos,BR,ativo
-p002,Parceiro Antifraude,risco,BR,ativo
-p003,Parceiro Global,dados,US,ativo
-EOT
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-parceiros-silver-${data.aws_caller_identity.current.account_id}/parceiros/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
       full_table_grants = {}
@@ -92,7 +110,8 @@ EOT
     gold = {
       tables = {
         parceiros_ativos = {
-          description    = "Parceiros ativos e contratos para analytics."
+          description    = "Parceiros ativos para analytics."
+          format         = "parquet"
           classification = "internal"
           pii            = "no"
           data_product   = "parceiros_ativos"
@@ -100,15 +119,19 @@ EOT
             { name = "parceiro_id",     type = "string" },
             { name = "nome_parceiro",   type = "string" },
             { name = "categoria",       type = "string" },
-            { name = "pais",            type = "string" },
             { name = "contrato_status", type = "string" }
           ]
-          sample_csv = <<EOT
-parceiro_id,nome_parceiro,categoria,pais,contrato_status
-p001,Parceiro Pagamentos,pagamentos,BR,ativo
-p002,Parceiro Antifraude,risco,BR,ativo
-p003,Parceiro Global,dados,US,ativo
-EOT
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-parceiros-gold-${data.aws_caller_identity.current.account_id}/parceiros_ativos/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
 

@@ -49,48 +49,9 @@ resource "aws_s3_object" "sample_csv" {
 resource "aws_s3_object" "glue_script" {
   bucket       = aws_s3_bucket.landing.id
   key          = "${local.scripts_prefix}/csv_to_parquet.py"
+  source       = "${path.module}/scripts/csv_to_parquet.py"
   content_type = "text/x-python"
-  content      = <<-PYTHON
-import sys
-import boto3
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-from io import StringIO, BytesIO
-from awsglue.utils import getResolvedOptions
-
-args = getResolvedOptions(sys.argv, ['source_bucket', 'source_key', 'target_bucket', 'target_prefix'])
-
-s3 = boto3.client('s3')
-
-# Lê CSV do landing zone
-response = s3.get_object(Bucket=args['source_bucket'], Key=args['source_key'])
-csv_content = response['Body'].read().decode('utf-8')
-
-# Converte para DataFrame (todas colunas como string para compatibilidade com Glue)
-df = pd.read_csv(StringIO(csv_content), dtype=str)
-
-# Particiona por pais e dt_ingest, grava cada partição como Parquet
-partition_cols = ['pais', 'dt_ingest']
-for keys, partition_df in df.groupby(partition_cols):
-    pais_val, dt_val = keys
-    data_df = partition_df.drop(columns=partition_cols)
-    
-    table = pa.Table.from_pandas(data_df, preserve_index=False)
-    buffer = BytesIO()
-    pq.write_table(table, buffer)
-    
-    target_key = f"{args['target_prefix']}/pais={pais_val}/dt_ingest={dt_val}/data.parquet"
-    s3.put_object(
-        Bucket=args['target_bucket'],
-        Key=target_key,
-        Body=buffer.getvalue(),
-        ContentType='application/octet-stream'
-    )
-    print(f"Partição pais={pais_val}/dt_ingest={dt_val}: {len(data_df)} registros")
-
-print(f"Total: {len(df)} registros convertidos para Parquet particionado")
-PYTHON
+  etag         = filemd5("${path.module}/scripts/csv_to_parquet.py")
 }
 
 # ─── IAM: Role para Glue Job ──────────────────────────────────────────────────
@@ -203,83 +164,9 @@ locals {
 resource "aws_s3_object" "glue_script_silver" {
   bucket       = aws_s3_bucket.landing.id
   key          = "${local.scripts_prefix}/bronze_to_silver.py"
+  source       = "${path.module}/scripts/bronze_to_silver.py"
   content_type = "text/x-python"
-  content      = <<-PYTHON
-import sys
-import boto3
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-from io import BytesIO
-from awsglue.utils import getResolvedOptions
-
-args = getResolvedOptions(sys.argv, ['source_bucket', 'source_prefix', 'target_bucket', 'target_prefix'])
-
-s3 = boto3.client('s3')
-
-# Lista todos os Parquets no bronze (todas as partições)
-paginator = s3.get_paginator('list_objects_v2')
-pages = paginator.paginate(Bucket=args['source_bucket'], Prefix=args['source_prefix'])
-
-frames = []
-for page in pages:
-    for obj in page.get('Contents', []):
-        key = obj['Key']
-        if not key.endswith('.parquet'):
-            continue
-        
-        # Extrai pais e dt_ingest do path Hive-style
-        parts = key.split('/')
-        pais_val = None
-        dt_val = None
-        for part in parts:
-            if part.startswith('pais='):
-                pais_val = part.split('=')[1]
-            elif part.startswith('dt_ingest='):
-                dt_val = part.split('=')[1]
-        
-        # Lê Parquet
-        response = s3.get_object(Bucket=args['source_bucket'], Key=key)
-        df = pd.read_parquet(BytesIO(response['Body'].read()))
-        df['pais'] = pais_val
-        df['dt_ingest'] = dt_val
-        frames.append(df)
-
-if not frames:
-    print("Nenhum dado encontrado no bronze")
-    sys.exit(0)
-
-# Concatena tudo
-df_all = pd.concat(frames, ignore_index=True)
-print(f"Bronze: {len(df_all)} registros lidos")
-
-# Deduplica: última dt_ingest vence por cliente_id
-df_dedup = (
-    df_all.sort_values('dt_ingest', ascending=False)
-          .drop_duplicates(subset=['cliente_id'], keep='first')
-          .drop(columns=['dt_ingest'])
-)
-print(f"Silver: {len(df_dedup)} registros após deduplicação")
-
-# Grava particionado por pais no silver
-for pais_val, pais_df in df_dedup.groupby('pais'):
-    data_df = pais_df.drop(columns=['pais'])
-    
-    table = pa.Table.from_pandas(data_df, preserve_index=False)
-    buffer = BytesIO()
-    pq.write_table(table, buffer)
-    
-    target_key = f"{args['target_prefix']}/pais={pais_val}/data.parquet"
-    s3.put_object(
-        Bucket=args['target_bucket'],
-        Key=target_key,
-        Body=buffer.getvalue(),
-        ContentType='application/octet-stream'
-    )
-    print(f"Silver partição pais={pais_val}: {len(data_df)} registros")
-
-print("Transformação bronze → silver concluída")
-PYTHON
+  etag         = filemd5("${path.module}/scripts/bronze_to_silver.py")
 }
 
 # IAM: acesso adicional ao bucket silver
@@ -425,91 +312,9 @@ locals {
 resource "aws_s3_object" "glue_script_gold" {
   bucket       = aws_s3_bucket.landing.id
   key          = "${local.scripts_prefix}/silver_to_gold.py"
+  source       = "${path.module}/scripts/silver_to_gold.py"
   content_type = "text/x-python"
-  content      = <<-PYTHON
-import sys
-import boto3
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-from io import BytesIO
-from awsglue.utils import getResolvedOptions
-
-args = getResolvedOptions(sys.argv, ['source_bucket', 'source_prefix', 'target_bucket', 'target_prefix'])
-
-s3 = boto3.client('s3')
-
-# Lista todos os Parquets no silver
-paginator = s3.get_paginator('list_objects_v2')
-pages = paginator.paginate(Bucket=args['source_bucket'], Prefix=args['source_prefix'])
-
-frames = []
-for page in pages:
-    for obj in page.get('Contents', []):
-        key = obj['Key']
-        if not key.endswith('.parquet'):
-            continue
-        
-        # Extrai pais do path
-        parts = key.split('/')
-        pais_val = None
-        for part in parts:
-            if part.startswith('pais='):
-                pais_val = part.split('=')[1]
-        
-        response = s3.get_object(Bucket=args['source_bucket'], Key=key)
-        df = pd.read_parquet(BytesIO(response['Body'].read()))
-        df['pais'] = pais_val
-        frames.append(df)
-
-if not frames:
-    print("Nenhum dado encontrado no silver")
-    sys.exit(0)
-
-df_all = pd.concat(frames, ignore_index=True)
-print(f"Silver: {len(df_all)} registros lidos")
-
-# Enriquecimento: adiciona colunas de outros domínios (NULL por agora)
-# Futuro: joins com dev_silver_contas, dev_silver_transacoes, dev_gold_alertas
-df_all['total_contas'] = None
-df_all['volume_transacoes'] = None
-df_all['ultima_transacao'] = None
-df_all['score_risco'] = None
-
-print(f"Gold: {len(df_all)} registros enriquecidos (colunas extras: NULL até domínios disponíveis)")
-
-# Grava particionado por pais no gold
-for pais_val, pais_df in df_all.groupby('pais'):
-    data_df = pais_df.drop(columns=['pais'])
-    
-    # Define schema explícito para manter tipos corretos
-    schema = pa.schema([
-        ('cliente_id', pa.string()),
-        ('nome', pa.string()),
-        ('cpf', pa.string()),
-        ('email', pa.string()),
-        ('segmento', pa.string()),
-        ('total_contas', pa.int32()),
-        ('volume_transacoes', pa.float64()),
-        ('ultima_transacao', pa.string()),
-        ('score_risco', pa.string()),
-    ])
-    
-    table = pa.Table.from_pandas(data_df, schema=schema, preserve_index=False)
-    buffer = BytesIO()
-    pq.write_table(table, buffer)
-    
-    target_key = f"{args['target_prefix']}/pais={pais_val}/data.parquet"
-    s3.put_object(
-        Bucket=args['target_bucket'],
-        Key=target_key,
-        Body=buffer.getvalue(),
-        ContentType='application/octet-stream'
-    )
-    print(f"Gold partição pais={pais_val}: {len(data_df)} registros")
-
-print("Transformação silver → gold concluída")
-PYTHON
+  etag         = filemd5("${path.module}/scripts/silver_to_gold.py")
 }
 
 # IAM: acesso ao bucket gold
