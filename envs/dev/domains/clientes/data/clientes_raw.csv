@@ -1,0 +1,16 @@
+cliente_id,nome,cpf,email,segmento,pais,dt_ingest
+c001,Ana Silva,11111111111,ana@example.com,alta_renda,BR,2026-01-10
+c002,Bruno Souza,22222222222,bruno@example.com,varejo,BR,2026-01-10
+c003,Carla Lima,33333333333,carla@example.com,internacional,US,2026-01-10
+c004,Daniel Rocha,44444444444,daniel@example.com,alta_renda,BR,2026-01-11
+c005,Elena Martins,55555555555,elena@example.com,varejo,BR,2026-01-11
+c006,John Smith,66666666666,john@example.com,alta_renda,US,2026-01-11
+c007,Maria Garcia,77777777777,maria@example.com,varejo,AR,2026-01-10
+c008,Carlos Mendez,88888888888,carlos.m@example.com,alta_renda,AR,2026-01-11
+c009,Sophie Dubois,99999999999,sophie@example.com,internacional,FR,2026-01-10
+c010,Hans Mueller,10101010101,hans@example.com,alta_renda,DE,2026-01-11
+c011,Roberto Costa,12121212121,roberto@example.com,varejo,BR,2026-01-12
+c012,James Wilson,13131313131,james@example.com,alta_renda,US,2026-01-12
+c013,Laura Martinez,14141414141,laura@example.com,varejo,AR,2026-01-12
+c014,Pierre Laurent,15151515151,pierre@example.com,internacional,FR,2026-01-12
+c015,Klaus Schmidt,16161616161,klaus@example.com,alta_renda,DE,2026-01-12

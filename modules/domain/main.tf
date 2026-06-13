@@ -55,7 +55,8 @@ locals {
 resource "aws_s3_bucket" "layer" {
   for_each = var.layers
 
-  bucket = local.bucket_names[each.key]
+  bucket        = local.bucket_names[each.key]
+  force_destroy = true
 
   tags = merge(local.default_tags, {
     Name  = "${local.name_prefix}-${var.domain}-${each.key}"
@@ -247,26 +248,32 @@ resource "aws_glue_catalog_table" "layer" {
   table_type    = "EXTERNAL_TABLE"
   description   = try(each.value.description, "")
 
-  parameters = {
-    "classification"         = "csv"
-    "skip.header.line.count" = "1"
-    "EXTERNAL"               = "TRUE"
-    "domain"                 = var.domain
-    "layer"                  = each.value.layer
-    "data_product"           = try(each.value.data_product, each.value.table_name)
-    "classification_lf"      = try(each.value.classification, "internal")
-    "pii"                    = try(each.value.pii, "no")
-  }
+  parameters = merge(
+    {
+      "classification"    = try(each.value.format, "csv")
+      "EXTERNAL"          = "TRUE"
+      "domain"            = var.domain
+      "layer"             = each.value.layer
+      "data_product"      = try(each.value.data_product, each.value.table_name)
+      "classification_lf" = try(each.value.classification, "internal")
+      "pii"               = try(each.value.pii, "no")
+    },
+    try(each.value.format, "csv") == "csv" ? { "skip.header.line.count" = "1" } : {},
+    try(each.value.partition_projection.enabled, false) ? merge(
+      { "projection.enabled" = "true" },
+      try(each.value.partition_projection.parameters, {})
+    ) : {}
+  )
 
   storage_descriptor {
     location      = "s3://${aws_s3_bucket.layer[each.value.layer].bucket}/${coalesce(each.value.s3_prefix, each.value.table_name)}/"
-    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
-    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+    input_format  = try(each.value.format, "csv") == "parquet" ? "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat" : "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = try(each.value.format, "csv") == "parquet" ? "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat" : "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
 
     ser_de_info {
       name                  = "${each.value.table_name}_serde"
-      serialization_library = "org.apache.hadoop.hive.serde2.OpenCSVSerde"
-      parameters = {
+      serialization_library = try(each.value.format, "csv") == "parquet" ? "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe" : "org.apache.hadoop.hive.serde2.OpenCSVSerde"
+      parameters = try(each.value.format, "csv") == "parquet" ? { "serialization.format" = "1" } : {
         "separatorChar" = ","
         "quoteChar"     = "\""
         "escapeChar"    = "\\"
@@ -280,6 +287,14 @@ resource "aws_glue_catalog_table" "layer" {
         type    = columns.value.type
         comment = try(columns.value.comment, "")
       }
+    }
+  }
+
+  dynamic "partition_keys" {
+    for_each = try(each.value.partition_keys, [])
+    content {
+      name = partition_keys.value.name
+      type = partition_keys.value.type
     }
   }
 

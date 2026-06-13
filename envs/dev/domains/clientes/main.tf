@@ -36,12 +36,14 @@ module "domain" {
   domain             = "clientes"
   owner              = "equipe-clientes"
   consumer_role_arns = [for role in data.aws_iam_role.consumer : role.arn]
+  create_sample_data = false
 
   layers = {
     bronze = {
       tables = {
         clientes_raw = {
           description    = "Dados brutos de clientes ingeridos da fonte."
+          format         = "parquet"
           classification = "restricted"
           pii            = "yes"
           columns = [
@@ -49,16 +51,25 @@ module "domain" {
             { name = "nome",       type = "string", comment = "PII" },
             { name = "cpf",        type = "string", comment = "PII" },
             { name = "email",      type = "string", comment = "PII" },
-            { name = "segmento",   type = "string" },
-            { name = "pais",       type = "string" },
-            { name = "dt_ingest",  type = "string" }
+            { name = "segmento",   type = "string" }
           ]
-          sample_csv = <<EOT
-cliente_id,nome,cpf,email,segmento,pais,dt_ingest
-c001,Ana Silva,11111111111,ana@example.com,alta_renda,BR,2026-01-10
-c002,Bruno Souza,22222222222,bruno@example.com,varejo,BR,2026-01-10
-c003,Carla Lima,33333333333,carla@example.com,internacional,US,2026-01-10
-EOT
+          partition_keys = [
+            { name = "pais",      type = "string" },
+            { name = "dt_ingest", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"         = "injected"
+              "projection.dt_ingest.type"    = "date"
+              "projection.dt_ingest.format"  = "yyyy-MM-dd"
+              "projection.dt_ingest.range"   = "2026-01-01,NOW"
+              "projection.dt_ingest.interval" = "1"
+              "projection.dt_ingest.interval.unit" = "DAYS"
+              "storage.location.template"    = "s3://lfmesh-dev-clientes-bronze-978473717587/clientes_raw/pais=$${pais}/dt_ingest=$${dt_ingest}/"
+            }
+          }
+          sample_csv = ""
         }
       }
       full_table_grants = {}
@@ -68,7 +79,8 @@ EOT
     silver = {
       tables = {
         clientes = {
-          description    = "Clientes limpos e padronizados."
+          description    = "Clientes deduplicados — última versão por cliente_id."
+          format         = "parquet"
           classification = "confidential"
           pii            = "yes"
           columns = [
@@ -76,15 +88,19 @@ EOT
             { name = "nome",       type = "string", comment = "PII" },
             { name = "cpf",        type = "string", comment = "PII" },
             { name = "email",      type = "string", comment = "PII" },
-            { name = "segmento",   type = "string" },
-            { name = "pais",       type = "string" }
+            { name = "segmento",   type = "string" }
           ]
-          sample_csv = <<EOT
-cliente_id,nome,cpf,email,segmento,pais
-c001,Ana Silva,11111111111,ana@example.com,alta_renda,BR
-c002,Bruno Souza,22222222222,bruno@example.com,varejo,BR
-c003,Carla Lima,33333333333,carla@example.com,internacional,US
-EOT
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-clientes-silver-978473717587/clientes/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
       full_table_grants = {}
@@ -94,24 +110,33 @@ EOT
     gold = {
       tables = {
         cliente_360 = {
-          description    = "Visão 360 analítica de clientes."
+          description    = "Visão 360 analítica de clientes — enriquecida com dados de outros domínios."
+          format         = "parquet"
           classification = "confidential"
           pii            = "yes"
           data_product   = "cliente_360"
           columns = [
-            { name = "cliente_id", type = "string" },
-            { name = "nome",       type = "string", comment = "PII" },
-            { name = "cpf",        type = "string", comment = "PII" },
-            { name = "email",      type = "string", comment = "PII" },
-            { name = "segmento",   type = "string" },
-            { name = "pais",       type = "string" }
+            { name = "cliente_id",         type = "string" },
+            { name = "nome",              type = "string", comment = "PII" },
+            { name = "cpf",               type = "string", comment = "PII" },
+            { name = "email",             type = "string", comment = "PII" },
+            { name = "segmento",          type = "string" },
+            { name = "total_contas",      type = "int",    comment = "Qtd contas ativas — domínio contas" },
+            { name = "volume_transacoes", type = "double", comment = "Soma valor transações — domínio transacoes" },
+            { name = "ultima_transacao",  type = "string", comment = "Data última transação — domínio transacoes" },
+            { name = "score_risco",       type = "string", comment = "Score de risco — domínio alertas" }
           ]
-          sample_csv = <<EOT
-cliente_id,nome,cpf,email,segmento,pais
-c001,Ana Silva,11111111111,ana@example.com,alta_renda,BR
-c002,Bruno Souza,22222222222,bruno@example.com,varejo,BR
-c003,Carla Lima,33333333333,carla@example.com,internacional,US
-EOT
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-clientes-gold-978473717587/cliente_360/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
 

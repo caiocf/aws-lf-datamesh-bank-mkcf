@@ -32,11 +32,20 @@ variable "layers" {
     tables = map(object({
       description    = optional(string, "")
       s3_prefix      = optional(string)
+      format         = optional(string, "csv")
       columns = list(object({
         name    = string
         type    = string
         comment = optional(string, "")
       }))
+      partition_keys = optional(list(object({
+        name = string
+        type = string
+      })), [])
+      partition_projection = optional(object({
+        enabled    = optional(bool, false)
+        parameters = optional(map(string), {})
+      }), { enabled = false, parameters = {} })
       sample_csv     = optional(string, "")
       classification = optional(string, "internal")
       pii            = optional(string, "no")

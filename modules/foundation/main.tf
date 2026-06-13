@@ -36,7 +36,8 @@ resource "aws_lakeformation_lf_tag" "this" {
 }
 
 resource "aws_s3_bucket" "athena_results" {
-  bucket = "${local.name_prefix}-athena-results-${data.aws_caller_identity.current.account_id}"
+  bucket        = "${local.name_prefix}-athena-results-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
 
   tags = merge(local.default_tags, {
     Name      = "${local.name_prefix}-athena-results"
@@ -200,8 +201,9 @@ resource "aws_iam_role_policy_attachment" "consumer_access" {
 resource "aws_athena_workgroup" "consumer" {
   for_each = var.consumer_personas
 
-  name        = "${local.name_prefix}-${each.key}"
-  description = "Workgroup Athena para persona ${each.key}"
+  name          = "${local.name_prefix}-${each.key}"
+  description   = "Workgroup Athena para persona ${each.key}"
+  force_destroy = true
 
   configuration {
     enforce_workgroup_configuration = true
