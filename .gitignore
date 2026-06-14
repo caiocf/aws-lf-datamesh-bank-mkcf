@@ -26,8 +26,8 @@ terraform.tfvars
 .terraform.tfstate.lock.info
 
 # Build artifacts / Lambda layers
-layers/kafka/
-lambda/producer.zip
+**/layers/kafka/
+**/lambda/producer.zip
 
 # Arquivos temporários
 response.json
