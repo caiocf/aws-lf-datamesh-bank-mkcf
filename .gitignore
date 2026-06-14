@@ -22,6 +22,16 @@ terraform.tfvars
 .env
 .env.*
 
+# Terraform lock info
+.terraform.tfstate.lock.info
+
+# Build artifacts / Lambda layers
+layers/kafka/
+lambda/producer.zip
+
+# Arquivos temporários
+response.json
+
 # OS
 .DS_Store
 Thumbs.db

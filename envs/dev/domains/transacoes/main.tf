@@ -28,6 +28,8 @@ data "aws_iam_role" "consumer" {
   name     = each.value
 }
 
+data "aws_caller_identity" "current" {}
+
 module "domain" {
   source = "../../../../modules/domain"
 
@@ -36,43 +38,17 @@ module "domain" {
   domain             = "transacoes"
   owner              = "equipe-transacoes"
   consumer_role_arns = [for role in data.aws_iam_role.consumer : role.arn]
+  create_sample_data = false
 
   layers = {
     bronze = {
       tables = {
         transacoes_raw = {
-          description    = "Transações brutas ingeridas da fonte."
+          description    = "Transacoes brutas ingeridas via MSK S3 Sink Connector."
+          format         = "json"
           classification = "confidential"
           pii            = "no"
-          columns = [
-            { name = "transacao_id",   type = "string" },
-            { name = "conta_id",       type = "string" },
-            { name = "cliente_id",     type = "string" },
-            { name = "valor",          type = "double" },
-            { name = "moeda",          type = "string" },
-            { name = "categoria",      type = "string" },
-            { name = "pais",           type = "string" },
-            { name = "data_transacao", type = "string" },
-            { name = "dt_ingest",      type = "string" }
-          ]
-          sample_csv = <<EOT
-transacao_id,conta_id,cliente_id,valor,moeda,categoria,pais,data_transacao,dt_ingest
-t001,a001,c001,220.50,BRL,mercado,BR,2026-01-10,2026-01-10
-t002,a002,c002,5000.00,BRL,transferencia,BR,2026-01-11,2026-01-11
-t003,a003,c003,90.00,USD,servicos,US,2026-01-11,2026-01-11
-EOT
-        }
-      }
-      full_table_grants = {}
-      data_filters      = {}
-    }
-
-    silver = {
-      tables = {
-        transacoes = {
-          description    = "Transações limpas e enriquecidas."
-          classification = "confidential"
-          pii            = "no"
+          s3_prefix      = "transacoes_raw/txn.transacoes.raw"
           columns = [
             { name = "transacao_id",   type = "string" },
             { name = "conta_id",       type = "string" },
@@ -83,12 +59,40 @@ EOT
             { name = "pais",           type = "string" },
             { name = "data_transacao", type = "string" }
           ]
-          sample_csv = <<EOT
-transacao_id,conta_id,cliente_id,valor,moeda,categoria,pais,data_transacao
-t001,a001,c001,220.50,BRL,mercado,BR,2026-01-10
-t002,a002,c002,5000.00,BRL,transferencia,BR,2026-01-11
-t003,a003,c003,90.00,USD,servicos,US,2026-01-11
-EOT
+          sample_csv = ""
+        }
+      }
+      full_table_grants = {}
+      data_filters      = {}
+    }
+
+    silver = {
+      tables = {
+        transacoes = {
+          description    = "Transacoes deduplicadas."
+          format         = "parquet"
+          classification = "confidential"
+          pii            = "no"
+          columns = [
+            { name = "transacao_id",   type = "string" },
+            { name = "conta_id",       type = "string" },
+            { name = "cliente_id",     type = "string" },
+            { name = "valor",          type = "double" },
+            { name = "moeda",          type = "string" },
+            { name = "categoria",      type = "string" },
+            { name = "data_transacao", type = "string" }
+          ]
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-transacoes-silver-${data.aws_caller_identity.current.account_id}/transacoes/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
       full_table_grants = {}
@@ -98,7 +102,8 @@ EOT
     gold = {
       tables = {
         transacoes_curated = {
-          description    = "Transações curadas para analytics e detecção de fraude."
+          description    = "Transacoes curadas para analytics."
+          format         = "parquet"
           classification = "confidential"
           pii            = "no"
           data_product   = "transacoes_curated"
@@ -109,15 +114,19 @@ EOT
             { name = "valor",          type = "double" },
             { name = "moeda",          type = "string" },
             { name = "categoria",      type = "string" },
-            { name = "pais",           type = "string" },
             { name = "data_transacao", type = "string" }
           ]
-          sample_csv = <<EOT
-transacao_id,conta_id,cliente_id,valor,moeda,categoria,pais,data_transacao
-t001,a001,c001,220.50,BRL,mercado,BR,2026-01-10
-t002,a002,c002,5000.00,BRL,transferencia,BR,2026-01-11
-t003,a003,c003,90.00,USD,servicos,US,2026-01-11
-EOT
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-transacoes-gold-${data.aws_caller_identity.current.account_id}/transacoes_curated/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
 

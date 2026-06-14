@@ -272,12 +272,20 @@ resource "aws_glue_catalog_table" "layer" {
 
     ser_de_info {
       name                  = "${each.value.table_name}_serde"
-      serialization_library = try(each.value.format, "csv") == "parquet" ? "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe" : "org.apache.hadoop.hive.serde2.OpenCSVSerde"
-      parameters = try(each.value.format, "csv") == "parquet" ? { "serialization.format" = "1" } : {
-        "separatorChar" = ","
-        "quoteChar"     = "\""
-        "escapeChar"    = "\\"
-      }
+      serialization_library = (
+        try(each.value.format, "csv") == "parquet" ? "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe" :
+        try(each.value.format, "csv") == "json" ? "org.openx.data.jsonserde.JsonSerDe" :
+        "org.apache.hadoop.hive.serde2.OpenCSVSerde"
+      )
+      parameters = (
+        try(each.value.format, "csv") == "parquet" ? { "serialization.format" = "1" } :
+        try(each.value.format, "csv") == "json" ? { "serialization.format" = "1" } :
+        {
+          "separatorChar" = ","
+          "quoteChar"     = "\""
+          "escapeChar"    = "\\"
+        }
+      )
     }
 
     dynamic "columns" {
