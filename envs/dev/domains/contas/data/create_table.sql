@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS contas (
+    conta_id VARCHAR(10) PRIMARY KEY,
+    cliente_id VARCHAR(10) NOT NULL,
+    tipo_conta VARCHAR(20) NOT NULL,
+    saldo DECIMAL(12,2) NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'ativa',
+    pais VARCHAR(5) NOT NULL
+);
+
+ALTER TABLE contas REPLICA IDENTITY FULL;

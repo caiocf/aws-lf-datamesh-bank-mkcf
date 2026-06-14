@@ -28,6 +28,8 @@ data "aws_iam_role" "consumer" {
   name     = each.value
 }
 
+data "aws_caller_identity" "current" {}
+
 module "domain" {
   source = "../../../../modules/domain"
 
@@ -36,29 +38,28 @@ module "domain" {
   domain             = "contas"
   owner              = "equipe-contas"
   consumer_role_arns = [for role in data.aws_iam_role.consumer : role.arn]
+  create_sample_data = false
 
   layers = {
     bronze = {
       tables = {
         contas_raw = {
-          description    = "Dados brutos de contas."
+          description    = "Dados CDC de contas replicados via DMS."
+          format         = "parquet"
           classification = "confidential"
           pii            = "no"
+          s3_prefix      = "contas_raw/public/contas"
           columns = [
-            { name = "conta_id",   type = "string" },
-            { name = "cliente_id", type = "string" },
-            { name = "tipo_conta", type = "string" },
-            { name = "saldo",      type = "double" },
-            { name = "status",     type = "string" },
-            { name = "pais",       type = "string" },
-            { name = "dt_ingest",  type = "string" }
+            { name = "Op",            type = "string", comment = "CDC operation: I=Insert, U=Update, D=Delete" },
+            { name = "conta_id",      type = "string" },
+            { name = "cliente_id",    type = "string" },
+            { name = "tipo_conta",    type = "string" },
+            { name = "saldo",         type = "decimal(12,2)" },
+            { name = "status",        type = "string" },
+            { name = "pais",          type = "string" },
+            { name = "dms_timestamp", type = "string", comment = "Timestamp DMS" }
           ]
-          sample_csv = <<EOT
-conta_id,cliente_id,tipo_conta,saldo,status,pais,dt_ingest
-a001,c001,corrente,15000.50,ativa,BR,2026-01-10
-a002,c002,poupanca,2500.00,ativa,BR,2026-01-10
-a003,c003,corrente,8000.00,ativa,US,2026-01-10
-EOT
+          sample_csv = ""
         }
       }
       full_table_grants = {}
@@ -68,23 +69,28 @@ EOT
     silver = {
       tables = {
         contas = {
-          description    = "Contas padronizadas e validadas."
+          description    = "Contas — estado atual após CDC merge."
+          format         = "parquet"
           classification = "confidential"
           pii            = "no"
           columns = [
             { name = "conta_id",   type = "string" },
             { name = "cliente_id", type = "string" },
             { name = "tipo_conta", type = "string" },
-            { name = "saldo",      type = "double" },
-            { name = "status",     type = "string" },
-            { name = "pais",       type = "string" }
+            { name = "saldo",      type = "decimal(12,2)" },
+            { name = "status",     type = "string" }
           ]
-          sample_csv = <<EOT
-conta_id,cliente_id,tipo_conta,saldo,status,pais
-a001,c001,corrente,15000.50,ativa,BR
-a002,c002,poupanca,2500.00,ativa,BR
-a003,c003,corrente,8000.00,ativa,US
-EOT
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-contas-silver-${data.aws_caller_identity.current.account_id}/contas/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
       full_table_grants = {}
@@ -95,6 +101,7 @@ EOT
       tables = {
         contas_ativas = {
           description    = "Contas ativas para analytics."
+          format         = "parquet"
           classification = "confidential"
           pii            = "no"
           data_product   = "contas_ativas"
@@ -102,16 +109,20 @@ EOT
             { name = "conta_id",   type = "string" },
             { name = "cliente_id", type = "string" },
             { name = "tipo_conta", type = "string" },
-            { name = "saldo",      type = "double" },
-            { name = "status",     type = "string" },
-            { name = "pais",       type = "string" }
+            { name = "saldo",      type = "decimal(12,2)" },
+            { name = "status",     type = "string" }
           ]
-          sample_csv = <<EOT
-conta_id,cliente_id,tipo_conta,saldo,status,pais
-a001,c001,corrente,15000.50,ativa,BR
-a002,c002,poupanca,2500.00,ativa,BR
-a003,c003,corrente,8000.00,ativa,US
-EOT
+          partition_keys = [
+            { name = "pais", type = "string" }
+          ]
+          partition_projection = {
+            enabled = true
+            parameters = {
+              "projection.pais.type"       = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-contas-gold-${data.aws_caller_identity.current.account_id}/contas_ativas/pais=$${pais}/"
+            }
+          }
+          sample_csv = ""
         }
       }
 
