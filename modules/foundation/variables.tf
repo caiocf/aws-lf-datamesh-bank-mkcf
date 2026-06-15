@@ -63,7 +63,7 @@ variable "lf_tags" {
       "contas",
       "transacoes",
       "parceiros",
-      "alertas"
+      "riscos"
     ]
 
     classification = [
@@ -103,7 +103,7 @@ variable "lf_tags" {
       "equipe-contas",
       "equipe-transacoes",
       "equipe-parceiros",
-      "equipe-alertas"
+      "equipe-riscos"
     ]
   }
 }
