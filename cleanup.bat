@@ -39,7 +39,13 @@ for %%D in (riscos transacoes contas parceiros clientes) do (
         )
         pushd "envs\%ENV%\domains\%%D"
         terraform destroy -auto-approve
+        set TF_EXIT=!errorlevel!
         popd
+        if not "!TF_EXIT!"=="0" (
+            echo ERRO: terraform destroy falhou no dominio %%D com exit code !TF_EXIT!.
+            popd >nul
+            exit /b !TF_EXIT!
+        )
         echo Dominio %%D destruido.
     ) else (
         echo Dominio %%D nao inicializado, pulando...
@@ -53,7 +59,13 @@ if exist "envs\%ENV%\foundation\.terraform" (
     echo Destruindo Foundation...
     pushd "envs\%ENV%\foundation"
     terraform destroy -auto-approve
+    set TF_EXIT=!errorlevel!
     popd
+    if not "!TF_EXIT!"=="0" (
+        echo ERRO: terraform destroy falhou na Foundation com exit code !TF_EXIT!.
+        popd >nul
+        exit /b !TF_EXIT!
+    )
     echo Foundation destruida.
 ) else (
     echo Foundation nao inicializada, pulando...
@@ -66,7 +78,13 @@ if exist "envs\%ENV%\consumer-roles\.terraform" (
     echo Destruindo Consumer Roles...
     pushd "envs\%ENV%\consumer-roles"
     terraform destroy -auto-approve
+    set TF_EXIT=!errorlevel!
     popd
+    if not "!TF_EXIT!"=="0" (
+        echo ERRO: terraform destroy falhou em Consumer Roles com exit code !TF_EXIT!.
+        popd >nul
+        exit /b !TF_EXIT!
+    )
     echo Consumer Roles destruidas.
 ) else (
     echo Consumer Roles nao inicializadas, pulando...
