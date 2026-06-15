@@ -5,34 +5,34 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Ambiente lógico."
+  description = "Ambiente logico."
   type        = string
   default     = "dev"
 }
 
 variable "domain" {
-  description = "Nome do domínio: clientes, contas, transacoes, parceiros ou alertas."
+  description = "Nome do dominio: clientes, contas, transacoes, parceiros ou riscos."
   type        = string
 }
 
 variable "owner" {
-  description = "Owner lógico do domínio."
+  description = "Owner logico do dominio."
   type        = string
 }
 
 variable "consumer_role_arns" {
-  description = "Roles consumidoras que receberão DESCRIBE nos databases."
+  description = "Roles consumidoras que receberao DESCRIBE nos databases."
   type        = list(string)
   default     = []
 }
 
 variable "layers" {
-  description = "Camadas do domínio (bronze, silver, gold) com suas tabelas, grants e filtros."
+  description = "Camadas do dominio (bronze, silver, gold) com suas tabelas, grants e filtros."
   type = map(object({
     tables = map(object({
-      description    = optional(string, "")
-      s3_prefix      = optional(string)
-      format         = optional(string, "csv")
+      description = optional(string, "")
+      s3_prefix   = optional(string)
+      format      = optional(string, "csv")
       columns = list(object({
         name    = string
         type    = string
@@ -70,7 +70,7 @@ variable "layers" {
 }
 
 variable "create_sample_data" {
-  description = "Cria objetos CSV pequenos no S3 para validação com Athena."
+  description = "Cria objetos CSV pequenos no S3 para validacao com Athena."
   type        = bool
   default     = true
 }

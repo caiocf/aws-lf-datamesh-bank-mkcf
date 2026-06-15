@@ -28,6 +28,8 @@ data "aws_iam_role" "consumer" {
   name     = each.value
 }
 
+data "aws_caller_identity" "current" {}
+
 module "domain" {
   source = "../../../../modules/domain"
 
@@ -48,25 +50,25 @@ module "domain" {
           pii            = "yes"
           columns = [
             { name = "cliente_id", type = "string" },
-            { name = "nome",       type = "string", comment = "PII" },
-            { name = "cpf",        type = "string", comment = "PII" },
-            { name = "email",      type = "string", comment = "PII" },
-            { name = "segmento",   type = "string" }
+            { name = "nome", type = "string", comment = "PII" },
+            { name = "cpf", type = "string", comment = "PII" },
+            { name = "email", type = "string", comment = "PII" },
+            { name = "segmento", type = "string" }
           ]
           partition_keys = [
-            { name = "pais",      type = "string" },
+            { name = "pais", type = "string" },
             { name = "dt_ingest", type = "string" }
           ]
           partition_projection = {
             enabled = true
             parameters = {
-              "projection.pais.type"         = "injected"
-              "projection.dt_ingest.type"    = "date"
-              "projection.dt_ingest.format"  = "yyyy-MM-dd"
-              "projection.dt_ingest.range"   = "2026-01-01,NOW"
-              "projection.dt_ingest.interval" = "1"
+              "projection.pais.type"               = "injected"
+              "projection.dt_ingest.type"          = "date"
+              "projection.dt_ingest.format"        = "yyyy-MM-dd"
+              "projection.dt_ingest.range"         = "2026-01-01,NOW"
+              "projection.dt_ingest.interval"      = "1"
               "projection.dt_ingest.interval.unit" = "DAYS"
-              "storage.location.template"    = "s3://lfmesh-dev-clientes-bronze-978473717587/clientes_raw/pais=$${pais}/dt_ingest=$${dt_ingest}/"
+              "storage.location.template"          = "s3://lfmesh-dev-clientes-bronze-${data.aws_caller_identity.current.account_id}/clientes_raw/pais=$${pais}/dt_ingest=$${dt_ingest}/"
             }
           }
           sample_csv = ""
@@ -79,16 +81,16 @@ module "domain" {
     silver = {
       tables = {
         clientes = {
-          description    = "Clientes deduplicados — última versão por cliente_id."
+          description    = "Clientes deduplicados - ultima versao por cliente_id."
           format         = "parquet"
           classification = "confidential"
           pii            = "yes"
           columns = [
             { name = "cliente_id", type = "string" },
-            { name = "nome",       type = "string", comment = "PII" },
-            { name = "cpf",        type = "string", comment = "PII" },
-            { name = "email",      type = "string", comment = "PII" },
-            { name = "segmento",   type = "string" }
+            { name = "nome", type = "string", comment = "PII" },
+            { name = "cpf", type = "string", comment = "PII" },
+            { name = "email", type = "string", comment = "PII" },
+            { name = "segmento", type = "string" }
           ]
           partition_keys = [
             { name = "pais", type = "string" }
@@ -96,8 +98,8 @@ module "domain" {
           partition_projection = {
             enabled = true
             parameters = {
-              "projection.pais.type"       = "injected"
-              "storage.location.template" = "s3://lfmesh-dev-clientes-silver-978473717587/clientes/pais=$${pais}/"
+              "projection.pais.type"      = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-clientes-silver-${data.aws_caller_identity.current.account_id}/clientes/pais=$${pais}/"
             }
           }
           sample_csv = ""
@@ -110,21 +112,21 @@ module "domain" {
     gold = {
       tables = {
         cliente_360 = {
-          description    = "Visão 360 analítica de clientes — enriquecida com dados de outros domínios."
+          description    = "Visao 360 analitica de clientes - enriquecida com dados de outros dominios."
           format         = "parquet"
           classification = "confidential"
           pii            = "yes"
           data_product   = "cliente_360"
           columns = [
-            { name = "cliente_id",         type = "string" },
-            { name = "nome",              type = "string", comment = "PII" },
-            { name = "cpf",               type = "string", comment = "PII" },
-            { name = "email",             type = "string", comment = "PII" },
-            { name = "segmento",          type = "string" },
-            { name = "total_contas",      type = "int",    comment = "Qtd contas ativas — domínio contas" },
-            { name = "volume_transacoes", type = "double", comment = "Soma valor transações — domínio transacoes" },
-            { name = "ultima_transacao",  type = "string", comment = "Data última transação — domínio transacoes" },
-            { name = "score_risco",       type = "string", comment = "Score de risco — domínio alertas" }
+            { name = "cliente_id", type = "string" },
+            { name = "nome", type = "string", comment = "PII" },
+            { name = "cpf", type = "string", comment = "PII" },
+            { name = "email", type = "string", comment = "PII" },
+            { name = "segmento", type = "string" },
+            { name = "total_contas", type = "int", comment = "Qtd contas ativas - dominio contas" },
+            { name = "volume_transacoes", type = "double", comment = "Soma valor transacoes - dominio transacoes" },
+            { name = "ultima_transacao", type = "string", comment = "Data ultima transacao - dominio transacoes" },
+            { name = "score_risco", type = "string", comment = "Score de risco - dominio riscos" }
           ]
           partition_keys = [
             { name = "pais", type = "string" }
@@ -132,8 +134,8 @@ module "domain" {
           partition_projection = {
             enabled = true
             parameters = {
-              "projection.pais.type"       = "injected"
-              "storage.location.template" = "s3://lfmesh-dev-clientes-gold-978473717587/cliente_360/pais=$${pais}/"
+              "projection.pais.type"      = "injected"
+              "storage.location.template" = "s3://lfmesh-dev-clientes-gold-${data.aws_caller_identity.current.account_id}/cliente_360/pais=$${pais}/"
             }
           }
           sample_csv = ""

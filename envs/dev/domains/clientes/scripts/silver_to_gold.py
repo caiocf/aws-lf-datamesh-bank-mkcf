@@ -41,7 +41,7 @@ df_all = pd.concat(frames, ignore_index=True)
 print(f"Silver: {len(df_all)} registros lidos")
 
 # Enriquecimento: adiciona colunas de outros domínios (NULL por agora)
-# Futuro: joins com dev_silver_contas, dev_silver_transacoes, dev_gold_alertas
+# Futuro: joins com dev_silver_contas, dev_silver_transacoes, dev_gold_riscos
 df_all['total_contas'] = None
 df_all['volume_transacoes'] = None
 df_all['ultima_transacao'] = None
