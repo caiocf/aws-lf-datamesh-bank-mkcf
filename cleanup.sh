@@ -101,6 +101,19 @@ else
 fi
 echo ""
 
+echo "=== FASE 4: DESTRUINDO NETWORK ==="
+
+if [ -d "$SCRIPT_DIR/envs/$ENV/network/.terraform" ]; then
+    echo "Destruindo Shared Network..."
+    pushd "$SCRIPT_DIR/envs/$ENV/network" > /dev/null
+    terraform destroy -auto-approve
+    popd > /dev/null
+    echo "Shared Network destruida."
+else
+    echo "Shared Network nao inicializada, pulando..."
+fi
+echo ""
+
 echo "=== VERIFICACAO FINAL ==="
 echo "Buckets S3 remanescentes:"
 aws s3 ls 2>/dev/null | grep "lfmesh-$ENV" || echo "   Nenhum."

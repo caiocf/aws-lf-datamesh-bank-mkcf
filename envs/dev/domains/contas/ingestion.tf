@@ -41,23 +41,20 @@ resource "aws_secretsmanager_secret_version" "db_credentials" {
   })
 }
 
-# --- Networking (default VPC) ---
+# --- Networking (shared network baseline) ---
 
-data "aws_vpc" "default" {
-  default = true
-}
+data "terraform_remote_state" "network" {
+  backend = "local"
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+  config = {
+    path = "${path.module}/../../network/terraform.tfstate"
   }
 }
 
 resource "aws_security_group" "rds" {
   name        = "${local.name_prefix}-rds-sg"
   description = "SG para RDS PostgreSQL do dominio contas"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   ingress {
     from_port   = 5432
@@ -65,14 +62,6 @@ resource "aws_security_group" "rds" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
     description = "PostgreSQL access"
-  }
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTPS for VPC Endpoints (Secrets Manager)"
   }
 
   egress {
@@ -89,7 +78,7 @@ resource "aws_security_group" "rds" {
 
 resource "aws_db_subnet_group" "contas" {
   name       = "${local.name_prefix}-subnet-group"
-  subnet_ids = data.aws_subnets.default.ids
+  subnet_ids = data.terraform_remote_state.network.outputs.all_subnet_ids
 
   tags = { Domain = "contas", Layer = "ingestion" }
 }
@@ -135,37 +124,6 @@ resource "aws_db_instance" "contas" {
   deletion_protection = false
 
   backup_retention_period = 1
-
-  tags = { Domain = "contas", Layer = "ingestion" }
-}
-
-# --- VPC Endpoints (necessarios para DMS com IP privado) ---
-
-data "aws_route_table" "default" {
-  vpc_id = data.aws_vpc.default.id
-
-  filter {
-    name   = "association.main"
-    values = ["true"]
-  }
-}
-
-resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = data.aws_vpc.default.id
-  service_name        = "com.amazonaws.us-east-1.secretsmanager"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = data.aws_subnets.default.ids
-  security_group_ids  = [aws_security_group.rds.id]
-  private_dns_enabled = true
-
-  tags = { Domain = "contas", Layer = "ingestion" }
-}
-
-resource "aws_vpc_endpoint" "s3" {
-  vpc_id            = data.aws_vpc.default.id
-  service_name      = "com.amazonaws.us-east-1.s3"
-  vpc_endpoint_type = "Gateway"
-  route_table_ids   = [data.aws_route_table.default.id]
 
   tags = { Domain = "contas", Layer = "ingestion" }
 }
@@ -317,7 +275,7 @@ resource "aws_dms_s3_endpoint" "target_s3" {
 resource "aws_dms_replication_subnet_group" "contas" {
   replication_subnet_group_id          = "${local.name_prefix}-dms-subnet"
   replication_subnet_group_description = "Subnet group para DMS contas"
-  subnet_ids                           = data.aws_subnets.default.ids
+  subnet_ids                           = data.terraform_remote_state.network.outputs.all_subnet_ids
 
   tags = { Domain = "contas", Layer = "ingestion" }
 
@@ -339,7 +297,7 @@ resource "aws_dms_replication_instance" "contas" {
 
   tags = { Domain = "contas", Layer = "ingestion" }
 
-  depends_on = [aws_iam_role_policy_attachment.dms_cloudwatch_logs, aws_vpc_endpoint.secretsmanager, aws_vpc_endpoint.s3]
+  depends_on = [aws_iam_role_policy_attachment.dms_cloudwatch_logs]
 }
 
 resource "aws_dms_replication_task" "contas_cdc" {
@@ -433,7 +391,7 @@ resource "aws_dms_replication_config" "contas_cdc" {
 
   tags = { Domain = "contas", Layer = "ingestion" }
 
-  depends_on = [aws_iam_role_policy_attachment.dms_s3_access, aws_lambda_invocation.db_seed, aws_vpc_endpoint.secretsmanager, aws_vpc_endpoint.s3]
+  depends_on = [aws_iam_role_policy_attachment.dms_s3_access, aws_lambda_invocation.db_seed]
 }
 
 
@@ -502,7 +460,7 @@ resource "aws_lambda_function" "db_seed" {
   role             = aws_iam_role.lambda_seed.arn
   handler          = "db_seed.handler"
   runtime          = "python3.12"
-  timeout          = 60
+  timeout          = 120
   memory_size      = 128
   filename         = data.archive_file.db_seed.output_path
   source_code_hash = data.archive_file.db_seed.output_base64sha256
@@ -519,6 +477,7 @@ resource "aws_lambda_function" "db_seed" {
       SQL_CREATE_TABLE_KEY = "sql/create_table.sql"
       SQL_SEED_INSERTS_KEY = "sql/seed_inserts.sql"
       WORKFLOW_NAME        = aws_glue_workflow.contas_pipeline.name
+      WORKFLOW_START_DELAY_SECONDS = "45"
     }
   }
 
@@ -727,5 +686,3 @@ resource "aws_lambda_invocation" "start_workflow" {
     aws_glue_trigger.scheduled_start
   ]
 }
-
-

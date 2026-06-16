@@ -3,6 +3,7 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
+from pyspark import StorageLevel
 
 args = getResolvedOptions(sys.argv, ['JOB_NAME', 'source_bucket', 'source_prefix', 'target_bucket', 'target_prefix'])
 
@@ -33,9 +34,12 @@ print(f"Bronze (via S3): {new_count} registros")
 if new_count == 0:
     print("Nenhum dado novo. Finalizando.")
 else:
+    df_silver = None
+
     # Tenta ler silver existente para merge
     try:
         df_silver = spark.read.option("basePath", target_path).parquet(target_path)
+        df_silver = df_silver.persist(StorageLevel.MEMORY_AND_DISK)
         silver_count = df_silver.count()
         print(f"Silver existente: {silver_count} registros")
         df_merged = df_new.unionByName(df_silver, allowMissingColumns=True)
@@ -45,11 +49,17 @@ else:
 
     # Deduplica por transacao_id
     df_dedup = df_merged.dropDuplicates(["transacao_id"])
+    df_dedup = df_dedup.persist(StorageLevel.MEMORY_AND_DISK)
+    dedup_count = df_dedup.count()
 
     print(f"Silver (após dedup): {df_dedup.count()} registros")
 
     # Grava particionado por pais (overwrite)
     df_dedup.write.mode("overwrite").partitionBy("pais").parquet(target_path)
+
+    if df_silver is not None:
+        df_silver.unpersist()
+    df_dedup.unpersist()
 
     print("Transformação bronze → silver concluída")
 

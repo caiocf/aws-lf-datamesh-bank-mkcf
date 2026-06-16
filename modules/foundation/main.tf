@@ -33,6 +33,10 @@ resource "aws_lakeformation_lf_tag" "this" {
 
   key    = each.key
   values = each.value
+
+  # On a fresh account, LF-Tags depend on Data Lake admin settings being
+  # applied first; otherwise the initial apply can race and fail.
+  depends_on = [aws_lakeformation_data_lake_settings.this]
 }
 
 resource "aws_s3_bucket" "athena_results" {

@@ -16,28 +16,20 @@ locals {
   msk_username  = "producer-user"
 }
 
-# --- Networking ---
+# --- Networking (shared network baseline) ---
 
-data "aws_vpc" "default" {
-  default = true
-}
+data "terraform_remote_state" "network" {
+  backend = "local"
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
-
-  filter {
-    name   = "availability-zone"
-    values = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d", "us-east-1f"]
+  config = {
+    path = "${path.module}/../../network/terraform.tfstate"
   }
 }
 
 resource "aws_security_group" "msk" {
   name        = "${local.name_prefix}-msk-sg"
   description = "SG para MSK e MSK Connect do dominio transacoes"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   ingress {
     from_port   = 9092
@@ -104,14 +96,6 @@ resource "aws_security_group" "msk" {
   }
 
   ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    self        = true
-    description = "HTTPS for VPC Endpoints"
-  }
-
-  ingress {
     from_port   = 2181
     to_port     = 2181
     protocol    = "tcp"
@@ -132,15 +116,7 @@ resource "aws_security_group" "msk" {
 resource "aws_security_group" "lambda" {
   name        = "${local.name_prefix}-lambda-sg"
   description = "SG para Lambda producer do dominio transacoes"
-  vpc_id      = data.aws_vpc.default.id
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    self        = true
-    description = "HTTPS - VPC Endpoints (Secrets Manager, Glue)"
-  }
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   egress {
     from_port   = 0
@@ -151,42 +127,6 @@ resource "aws_security_group" "lambda" {
 
   tags = { Domain = "transacoes", Layer = "ingestion" }
 }
-
-# VPC Endpoint Gateway para S3 (MSK Connect precisa para gravar no S3)
-resource "aws_vpc_endpoint" "s3" {
-  vpc_id            = data.aws_vpc.default.id
-  service_name      = "com.amazonaws.${var.aws_region}.s3"
-  vpc_endpoint_type = "Gateway"
-  route_table_ids   = [data.aws_vpc.default.main_route_table_id]
-
-  tags = { Domain = "transacoes", Layer = "ingestion" }
-}
-
-# VPC Endpoint para Secrets Manager (Lambda na VPC precisa)
-resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = data.aws_vpc.default.id
-  service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = slice(data.aws_subnets.default.ids, 0, 3)
-  security_group_ids  = [aws_security_group.lambda.id]
-  private_dns_enabled = true
-
-  tags = { Domain = "transacoes", Layer = "ingestion" }
-}
-
-# VPC Endpoint para Glue (Lambda na VPC precisa para StartWorkflowRun)
-resource "aws_vpc_endpoint" "glue" {
-  vpc_id              = data.aws_vpc.default.id
-  service_name        = "com.amazonaws.${var.aws_region}.glue"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = slice(data.aws_subnets.default.ids, 0, 3)
-  security_group_ids  = [aws_security_group.lambda.id]
-  private_dns_enabled = true
-
-  tags = { Domain = "transacoes", Layer = "ingestion" }
-}
-
-
 
 # --- Secrets Manager (credenciais SCRAM para MSK) ---
 
@@ -237,7 +177,7 @@ resource "aws_msk_cluster" "transacoes" {
 
   broker_node_group_info {
     instance_type   = "kafka.t3.small"
-    client_subnets  = slice(data.aws_subnets.default.ids, 0, 2)
+    client_subnets  = data.terraform_remote_state.network.outputs.msk_broker_subnet_ids
     security_groups = [aws_security_group.msk.id]
 
     storage_info {
@@ -304,8 +244,8 @@ resource "aws_msk_cluster_policy" "transacoes" {
         Resource = [aws_msk_cluster.transacoes.arn]
       },
       {
-        Sid    = "TopicOperations"
-        Effect = "Allow"
+        Sid       = "TopicOperations"
+        Effect    = "Allow"
         Principal = { AWS = "*" }
         Action = [
           "kafka-cluster:CreateTopic",
@@ -416,7 +356,7 @@ resource "aws_lambda_function" "producer" {
   layers = [aws_lambda_layer_version.kafka.arn]
 
   vpc_config {
-    subnet_ids         = slice(data.aws_subnets.default.ids, 0, 3)
+    subnet_ids         = data.terraform_remote_state.network.outputs.platform_subnet_ids
     security_group_ids = [aws_security_group.lambda.id]
   }
 
@@ -441,7 +381,7 @@ resource "aws_lambda_invocation" "create_topic" {
   function_name = aws_lambda_function.producer.function_name
   input         = jsonencode({})
 
-  depends_on = [aws_lambda_function.producer, aws_msk_cluster.transacoes, aws_msk_scram_secret_association.transacoes, aws_vpc_endpoint.secretsmanager, aws_vpc_endpoint.glue]
+  depends_on = [aws_lambda_function.producer, aws_msk_cluster.transacoes, aws_msk_scram_secret_association.transacoes]
 }
 
 # --- EventBridge: Schedule para producer ---
@@ -538,9 +478,9 @@ resource "aws_iam_policy" "msk_connect_access" {
         Resource = ["arn:aws:s3:::${local.bronze_bucket}", "arn:aws:s3:::${local.bronze_bucket}/*"]
       },
       {
-        Sid      = "MSKConnect"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "MSKConnect"
+        Effect = "Allow"
+        Action = [
           "kafka-cluster:Connect",
           "kafka-cluster:DescribeCluster",
           "kafka-cluster:ReadData",
@@ -613,7 +553,7 @@ resource "aws_mskconnect_connector" "s3_sink" {
       bootstrap_servers = aws_msk_cluster.transacoes.bootstrap_brokers_sasl_iam
       vpc {
         security_groups = [aws_security_group.msk.id]
-        subnets         = slice(data.aws_subnets.default.ids, 0, 3)
+        subnets         = data.terraform_remote_state.network.outputs.platform_subnet_ids
       }
     }
   }

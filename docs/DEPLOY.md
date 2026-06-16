@@ -1,11 +1,11 @@
 # Deploy passo a passo
 
-## 1. Pré-requisitos
+## 1. Pre-requisitos
 
 - AWS CLI autenticado na conta do lab
 - Terraform instalado
-- Região usada neste repositório: `us-east-1`
-- Foundation aplicada antes dos domínios
+- regiao usada neste repositorio: `us-east-1`
+- permissao para IAM, S3, Glue, Athena, Lake Formation, Lambda, CloudWatch, RDS, DMS e MSK
 
 Exemplo no PowerShell:
 
@@ -15,16 +15,30 @@ $env:AWS_REGION  = "us-east-1"
 aws sts get-caller-identity
 ```
 
-## 2. Foundation
+## 2. Consumer roles (opcional, mas recomendado)
+
+Use esta etapa se quiser simular usuarios e aplicacoes consumidoras de forma mais realista.
 
 ```powershell
-Set-Location envs/dev/foundation
+Set-Location envs/dev/consumer-roles
+Copy-Item terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+terraform output all_consumer_role_arns
+```
+
+Se for usar essas roles para assumir as personas do lab, depois copie os ARNs para `trusted_principal_arns` na `foundation`.
+
+## 3. Foundation
+
+```powershell
+Set-Location ../foundation
 Copy-Item terraform.tfvars.example terraform.tfvars
 terraform init
 terraform apply
 ```
 
-Guarde estes outputs, porque eles serão usados na validação de governança:
+Guarde estes outputs, porque eles serao usados na validacao de governanca:
 
 ```powershell
 terraform output consumer_role_arns
@@ -33,9 +47,31 @@ terraform output athena_workgroups
 terraform output athena_results_bucket
 ```
 
-## 3. Ordem recomendada dos domínios
+## 4. Shared network
 
-Esta é a ordem alinhada com o estado atual do projeto e com o `PLANO-INGESTAO.md`:
+Antes dos dominios conectados a VPC, aplique a camada compartilhada `network`:
+
+```powershell
+Set-Location ../network
+Copy-Item terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+Essa camada:
+
+- usa a `default VPC` do lab
+- cria os `VPC Endpoints` compartilhados de `S3`, `Secrets Manager` e `Glue`
+- publica outputs consumidos por `contas`, `transacoes` e `riscos`
+
+Importante:
+
+- `contas`, `transacoes` e `riscos` leem `envs/dev/network/terraform.tfstate` via `terraform_remote_state`
+- esses dominios continuam com `terraform apply` individual, mas o state `network` precisa existir antes
+
+## 5. Ordem recomendada dos dominios
+
+Esta e a ordem alinhada com o estado atual do projeto e com o plano de ingestao:
 
 1. `clientes`
 2. `parceiros`
@@ -43,7 +79,7 @@ Esta é a ordem alinhada com o estado atual do projeto e com o `PLANO-INGESTAO.m
 4. `transacoes`
 5. `riscos`
 
-### 3.1 clientes
+### 5.1 clientes
 
 ```powershell
 Set-Location ../domains/clientes
@@ -52,7 +88,13 @@ terraform init
 terraform apply
 ```
 
-### 3.2 parceiros
+Observacao:
+
+- o deploy cria `EventBridge`, uma Lambda orquestradora e o workflow Glue
+- o `terraform apply` invoca a Lambda uma vez para disparar a primeira execucao
+- depois disso, o schedule diario passa a chamar a Lambda, que por sua vez executa `StartWorkflowRun`
+
+### 5.2 parceiros
 
 ```powershell
 Set-Location ../parceiros
@@ -61,7 +103,13 @@ terraform init
 terraform apply
 ```
 
-### 3.3 contas
+Observacao:
+
+- o deploy cria `API Gateway`, Lambda ingestor, `EventBridge` e workflow Glue
+- o `terraform apply` invoca a Lambda uma vez para semear a primeira carga
+- depois disso, o schedule diario continua disparando a Lambda, que grava no bronze e inicia o workflow
+
+### 5.3 contas
 
 ```powershell
 Set-Location ../contas
@@ -70,11 +118,12 @@ terraform init
 terraform apply
 ```
 
-Observação:
-- este domínio cria `RDS PostgreSQL`, `DMS`, `Secrets Manager` e jobs Glue
+Observacao:
+
+- este dominio cria `RDS PostgreSQL`, `DMS`, `Secrets Manager` e jobs Glue
 - o deploy demora mais do que `clientes` e `parceiros`
 
-### 3.4 transacoes
+### 5.4 transacoes
 
 ```powershell
 Set-Location ../transacoes
@@ -83,11 +132,12 @@ terraform init
 terraform apply
 ```
 
-Observação:
-- este domínio cria `MSK Provisionado`, `MSK Connect`, `Secrets Manager`, `KMS` e jobs Glue
-- após o deploy, o producer roda a cada 5 minutos e o workflow roda de hora em hora
+Observacao:
 
-### 3.5 riscos
+- este dominio cria `MSK Provisioned`, `MSK Connect`, `Secrets Manager`, `KMS` e jobs Glue
+- apos o deploy, o producer roda a cada 5 minutos e o workflow roda de hora em hora
+
+### 5.5 riscos
 
 ```powershell
 Set-Location ../riscos
@@ -96,28 +146,22 @@ terraform init
 terraform apply
 ```
 
-Se `contas` ou `transacoes` já tiverem criado endpoints na VPC default, ajuste manualmente o `terraform.tfvars` de `riscos` antes do `apply`:
+Observacao:
 
-```hcl
-aws_region           = "us-east-1"
-project_name         = "lfmesh"
-environment          = "dev"
-create_vpc_endpoints = false
-```
-
-Observação:
-- este domínio cria `MSK Serverless`, `Glue Streaming`, `EventBridge`, workflow batch e governança na gold
+- este dominio cria `MSK Serverless`, `Glue Streaming`, `EventBridge`, workflow batch e governanca na gold
 - o producer roda a cada 5 minutos
 - a Lambda `lfmesh-dev-riscos-start-streaming-job` roda a cada 15 minutos como watchdog
-- o job `lfmesh-dev-riscos-streaming-to-bronze` é iniciado automaticamente no deploy
+- o job `lfmesh-dev-riscos-streaming-to-bronze` e iniciado automaticamente no deploy
 
-## 4. Validação no Athena
+## 6. Validacao no Athena
 
 Use primeiro seu perfil admin do Lake Formation e o workgroup retornado pela foundation.
 
 Para tabelas com `partition projection` usando `pais = injected`, prefira consultas com `WHERE pais = 'BR'`.
 
-### 4.1 Validação rápida das gold tables
+Se alguma tabela ainda vier vazia logo apos o deploy, espere os jobs Glue terminarem antes de repetir o `SELECT`.
+
+### 6.1 Validacao rapida das gold tables
 
 ```sql
 SELECT * FROM dev_gold_clientes.cliente_360 WHERE pais = 'BR' LIMIT 10;
@@ -127,7 +171,7 @@ SELECT * FROM dev_gold_transacoes.transacoes_curated WHERE pais = 'BR' LIMIT 10;
 SELECT * FROM dev_gold_riscos.alertas_fraude WHERE pais = 'BR' LIMIT 10;
 ```
 
-### 4.2 Validação específica do domínio riscos
+### 6.2 Validacao especifica do dominio riscos
 
 ```sql
 SELECT count(*) FROM dev_bronze_riscos.riscos_raw WHERE pais = 'BR';
@@ -135,19 +179,19 @@ SELECT count(*) FROM dev_silver_riscos.riscos WHERE pais = 'BR';
 SELECT count(*) FROM dev_gold_riscos.alertas_fraude WHERE pais = 'BR';
 ```
 
-## 5. Validação de governança
+## 7. Validacao de governanca
 
-Depois da validação admin, assuma as roles consumidoras da foundation pela console ou CLI e teste os workgroups correspondentes.
+Depois da validacao admin, assuma as roles consumidoras da foundation pela console ou CLI e teste os workgroups correspondentes.
 
-Resultado esperado no domínio `riscos`:
+Resultado esperado no dominio `riscos`:
 
-- `auditoria`: acessa `dev_gold_riscos.alertas_fraude` sem filtro de linha nem exclusão de coluna
-- `bi`: vê apenas `pais = 'BR'` e não enxerga a coluna `score_risco`
-- `risco-fraude`: vê apenas `pais = 'BR'` e enxerga `score_risco`
-- `data-science` e `data-warehouse`: não consomem o data product `riscos` hoje
-- consumidores não enxergam `bronze` nem `silver`
+- `auditoria`: acessa `dev_gold_riscos.alertas_fraude` sem filtro de linha nem exclusao de coluna
+- `bi`: ve apenas `pais = 'BR'` e nao enxerga a coluna `score_risco`
+- `risco-fraude`: ve apenas `pais = 'BR'` e enxerga `score_risco`
+- `data-science` e `data-warehouse`: nao consomem o data product `riscos` hoje
+- consumidores nao enxergam `bronze` nem `silver`
 
-## 6. Destruição
+## 8. Destruicao
 
 Antes de destruir `riscos`, vale pausar os agendamentos e parar o streaming ativo:
 
@@ -176,8 +220,14 @@ terraform destroy
 Set-Location ../clientes
 terraform destroy
 
-Set-Location ../../foundation
+Set-Location ../../network
+terraform destroy
+
+Set-Location ../foundation
+terraform destroy
+
+Set-Location ../consumer-roles
 terraform destroy
 ```
 
-Se o objetivo for só economizar custo, destruir `transacoes`, `contas` e `riscos` primeiro já elimina a maior parte do gasto recorrente do lab.
+Se o objetivo for so economizar custo, destruir `transacoes`, `contas` e `riscos` primeiro ja elimina a maior parte do gasto recorrente do lab.

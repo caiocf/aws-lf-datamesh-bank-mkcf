@@ -8,11 +8,11 @@
 #
 
 locals {
-  name_prefix    = "${var.project_name}-${var.environment}-parceiros"
-  account_id     = data.aws_caller_identity.current.account_id
-  bronze_bucket  = "${var.project_name}-${var.environment}-parceiros-bronze-${local.account_id}"
-  silver_bucket  = "${var.project_name}-${var.environment}-parceiros-silver-${local.account_id}"
-  gold_bucket    = "${var.project_name}-${var.environment}-parceiros-gold-${local.account_id}"
+  name_prefix   = "${var.project_name}-${var.environment}-parceiros"
+  account_id    = data.aws_caller_identity.current.account_id
+  bronze_bucket = "${var.project_name}-${var.environment}-parceiros-bronze-${local.account_id}"
+  silver_bucket = "${var.project_name}-${var.environment}-parceiros-silver-${local.account_id}"
+  gold_bucket   = "${var.project_name}-${var.environment}-parceiros-gold-${local.account_id}"
 }
 
 # ─── Lambda: API Mock ──────────────────────────────────────────────────────────
@@ -44,12 +44,12 @@ resource "aws_iam_role_policy_attachment" "lambda_api_mock_basic" {
 }
 
 resource "aws_lambda_function" "api_mock" {
-  function_name = "${local.name_prefix}-api-mock"
-  role          = aws_iam_role.lambda_api_mock.arn
-  handler       = "api_mock.handler"
-  runtime       = "python3.12"
-  timeout       = 10
-  filename      = data.archive_file.api_mock.output_path
+  function_name    = "${local.name_prefix}-api-mock"
+  role             = aws_iam_role.lambda_api_mock.arn
+  handler          = "api_mock.handler"
+  runtime          = "python3.12"
+  timeout          = 10
+  filename         = data.archive_file.api_mock.output_path
   source_code_hash = data.archive_file.api_mock.output_base64sha256
 
   tags = { Domain = "parceiros", Layer = "ingestion" }
@@ -154,8 +154,11 @@ resource "aws_iam_policy" "lambda_ingestor_access" {
       {
         Sid      = "StartGlueWorkflow"
         Effect   = "Allow"
-        Action   = ["glue:StartWorkflowRun"]
-        Resource = ["*"]
+        Action   = [
+          "glue:GetWorkflowRuns",
+          "glue:StartWorkflowRun"
+        ]
+        Resource = ["arn:aws:glue:${var.aws_region}:${local.account_id}:workflow/${aws_glue_workflow.parceiros_pipeline.name}"]
       }
     ]
   })
@@ -169,35 +172,47 @@ resource "aws_iam_role_policy_attachment" "lambda_ingestor_access" {
 # Layer AWS SDK for pandas (awswrangler) — managed pela AWS
 # https://aws-sdk-pandas.readthedocs.io/en/stable/layers.html
 resource "aws_lambda_function" "ingestor" {
-  function_name = "${local.name_prefix}-ingestor"
-  role          = aws_iam_role.lambda_ingestor.arn
-  handler       = "ingestor.handler"
-  runtime       = "python3.12"
-  timeout       = 60
-  memory_size   = 256
-  filename      = data.archive_file.ingestor.output_path
+  function_name    = "${local.name_prefix}-ingestor"
+  role             = aws_iam_role.lambda_ingestor.arn
+  handler          = "ingestor.handler"
+  runtime          = "python3.12"
+  timeout          = 60
+  memory_size      = 256
+  filename         = data.archive_file.ingestor.output_path
   source_code_hash = data.archive_file.ingestor.output_base64sha256
 
   layers = ["arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:15"]
 
   environment {
     variables = {
-      API_URL       = "${aws_api_gateway_stage.prod.invoke_url}/parceiros"
-      TARGET_BUCKET = local.bronze_bucket
-      TARGET_PREFIX = "parceiros_raw"
-      WORKFLOW_NAME = aws_glue_workflow.parceiros_pipeline.name
+      API_URL            = "${aws_api_gateway_stage.prod.invoke_url}/parceiros"
+      TARGET_BUCKET      = local.bronze_bucket
+      TARGET_PREFIX      = "parceiros_raw"
+      GLUE_WORKFLOW_NAME = aws_glue_workflow.parceiros_pipeline.name
     }
   }
 
   tags = { Domain = "parceiros", Layer = "ingestion" }
 }
 
-# ─── EventBridge: Schedule ─────────────────────────────────────────────────────
+resource "aws_lambda_invocation" "seed_ingestion" {
+  function_name = aws_lambda_function.ingestor.function_name
+  input         = jsonencode({})
+
+  depends_on = [
+    aws_lambda_function.ingestor,
+    aws_api_gateway_stage.prod,
+    aws_glue_trigger.start_silver,
+    aws_glue_trigger.silver_to_gold_chain
+  ]
+}
+
+# Glue Workflow: Transformação bronze → silver → gold ───────────────────────
 
 resource "aws_cloudwatch_event_rule" "ingestor_schedule" {
   name                = "${local.name_prefix}-ingestor-daily"
-  description         = "Dispara ingestão diária de parceiros"
-  schedule_expression = "cron(0 6 * * ? *)"
+  description         = "Dispara ingestao diaria de parceiros"
+  schedule_expression = "rate(1 hour)"
 
   tags = { Domain = "parceiros", Layer = "ingestion" }
 }
@@ -214,8 +229,6 @@ resource "aws_lambda_permission" "eventbridge" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.ingestor_schedule.arn
 }
-
-# ─── Glue Workflow: Transformação bronze → silver → gold ───────────────────────
 
 resource "aws_glue_workflow" "parceiros_pipeline" {
   name = "${local.name_prefix}-pipeline"
@@ -245,9 +258,9 @@ resource "aws_iam_policy" "glue_job_access" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "S3Access"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+        Sid    = "S3Access"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"]
         Resource = [
           "arn:aws:s3:::${local.bronze_bucket}", "arn:aws:s3:::${local.bronze_bucket}/*",
           "arn:aws:s3:::${local.silver_bucket}", "arn:aws:s3:::${local.silver_bucket}/*",
@@ -306,14 +319,14 @@ resource "aws_glue_job" "bronze_to_silver" {
     python_version  = "3"
   }
   default_arguments = {
-    "--JOB_NAME"                  = "${local.name_prefix}-bronze-to-silver"
-    "--source_bucket"             = local.bronze_bucket
-    "--source_prefix"             = "parceiros_raw"
-    "--target_bucket"             = local.silver_bucket
-    "--target_prefix"             = "parceiros"
-    "--enable-metrics"            = "true"
-    "--enable-spark-ui"           = "true"
-    "--spark-event-logs-path"     = "s3://${aws_s3_bucket.scripts.id}/spark-logs/"
+    "--JOB_NAME"              = "${local.name_prefix}-bronze-to-silver"
+    "--source_bucket"         = local.bronze_bucket
+    "--source_prefix"         = "parceiros_raw"
+    "--target_bucket"         = local.silver_bucket
+    "--target_prefix"         = "parceiros"
+    "--enable-metrics"        = "true"
+    "--enable-spark-ui"       = "true"
+    "--spark-event-logs-path" = "s3://${aws_s3_bucket.scripts.id}/spark-logs/"
   }
   number_of_workers = 2
   worker_type       = "G.1X"
@@ -332,13 +345,13 @@ resource "aws_glue_job" "silver_to_gold" {
     python_version  = "3"
   }
   default_arguments = {
-    "--source_bucket"             = local.silver_bucket
-    "--source_prefix"             = "parceiros"
-    "--target_bucket"             = local.gold_bucket
-    "--target_prefix"             = "parceiros_ativos"
-    "--enable-metrics"            = "true"
-    "--enable-spark-ui"           = "true"
-    "--spark-event-logs-path"     = "s3://${aws_s3_bucket.scripts.id}/spark-logs/"
+    "--source_bucket"         = local.silver_bucket
+    "--source_prefix"         = "parceiros"
+    "--target_bucket"         = local.gold_bucket
+    "--target_prefix"         = "parceiros_ativos"
+    "--enable-metrics"        = "true"
+    "--enable-spark-ui"       = "true"
+    "--spark-event-logs-path" = "s3://${aws_s3_bucket.scripts.id}/spark-logs/"
   }
   number_of_workers = 2
   worker_type       = "G.1X"
@@ -347,7 +360,7 @@ resource "aws_glue_job" "silver_to_gold" {
   tags              = { Domain = "parceiros", Layer = "transformation" }
 }
 
-# Triggers no Workflow (ON_DEMAND start → bronze_to_silver → silver_to_gold)
+# Triggers no Workflow (ON_DEMAND start -> bronze_to_silver -> silver_to_gold)
 resource "aws_glue_trigger" "start_silver" {
   name          = "${local.name_prefix}-start-silver"
   type          = "ON_DEMAND"

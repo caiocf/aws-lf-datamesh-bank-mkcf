@@ -16,12 +16,14 @@ Dominios implementados hoje:
 
 Cada dominio simula uma conta produtora independente. A governanca central fica no modulo `foundation`, enquanto o diretorio `consumer-roles` cria principals mais realistas para simular usuarios e aplicacoes consumidoras.
 
+Os dominios `contas`, `transacoes` e `riscos` compartilham uma baseline de rede por ambiente em `envs/dev/network`. Essa camada e a unica dona dos `VPC Endpoints` do lab e precisa ser aplicada antes dos dominios conectados a VPC.
+
 ## Matriz de dominios
 
 | Dominio | Fonte principal | Modo de ingestao | Servicos principais | Data product gold |
 | --- | --- | --- | --- | --- |
-| `clientes` | CSV local | Batch diario | S3 landing, Glue Python Shell, Glue Workflow | `dev_gold_clientes.cliente_360` |
-| `parceiros` | API mock JSON | Batch diario | API Gateway, Lambda, Glue Workflow | `dev_gold_parceiros.parceiros_ativos` |
+| `clientes` | CSV local | Batch diario | S3 landing, EventBridge, Lambda, Glue Python Shell, Glue Workflow | `dev_gold_clientes.cliente_360` |
+| `parceiros` | API mock JSON | Batch diario | API Gateway, EventBridge, Lambda, Glue Workflow | `dev_gold_parceiros.parceiros_ativos` |
 | `contas` | PostgreSQL | CDC continuo + curadoria horaria | RDS, DMS, Lambda seed, Glue Workflow | `dev_gold_contas.contas_ativas` |
 | `transacoes` | Eventos Kafka | Streaming + curadoria horaria | MSK Provisioned, Lambda, MSK Connect, Glue Workflow | `dev_gold_transacoes.transacoes_curated` |
 | `riscos` | Eventos Kafka | Streaming + curadoria horaria | MSK Serverless, Lambda, Glue Streaming, Glue Workflow | `dev_gold_riscos.alertas_fraude` |
@@ -65,6 +67,15 @@ Padrao compartilhado por todos os dominios:
 
 Cada dominio complementa esse padrao com um `ingestion.tf` proprio.
 
+### `envs/dev/network`
+
+Estado compartilhado de rede do ambiente:
+
+- descobre a `default VPC` do lab
+- expõe subnets padronizadas para MSK, Lambda, DMS e Glue Connection
+- cria `VPC Endpoints` compartilhados para `S3`, `Secrets Manager` e `Glue`
+- publica outputs consumidos por `contas`, `transacoes` e `riscos` via `terraform_remote_state`
+
 ## Governanca e seguranca
 
 O projeto usa Lake Formation como plano central de autorizacao:
@@ -93,7 +104,8 @@ Exemplos de governanca implementada:
 Observacoes operacionais:
 
 - `contas`, `transacoes` e `riscos` dependem da VPC default da conta
-- `riscos` pode precisar de `create_vpc_endpoints = false` se outros dominios ja tiverem criado endpoints na mesma VPC
+- `envs/dev/network` deve ser aplicado antes de `contas`, `transacoes` e `riscos`
+- `contas`, `transacoes` e `riscos` leem o state local `envs/dev/network/terraform.tfstate`
 - alguns dominios mantem schedules e jobs ativos em background
 
 ## Ordem recomendada de deploy
@@ -121,7 +133,18 @@ terraform apply
 
 Se quiser ligar a `foundation` as roles criadas em `consumer-roles`, preencha `trusted_principal_arns` no `terraform.tfvars`. Para um lab rapido, o arquivo exemplo tambem permite deixar esse valor vazio e usar o `root` da conta como principal confiavel.
 
-### 3. Dominios
+### 3. Shared network
+
+```bash
+cd ../network
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+Esse estado prepara a rede compartilhada do lab para os dominios conectados a VPC.
+
+### 4. Dominios
 
 Ordem alinhada com o estado atual do repositorio:
 
@@ -140,7 +163,9 @@ terraform init
 terraform apply
 ```
 
-Repita para os demais dominios. Os comandos detalhados de deploy, validacao e destruicao estao em [docs/DEPLOY.md](docs/DEPLOY.md).
+Repita para os demais dominios. Para `contas`, `transacoes` e `riscos`, o `plan/apply` individual continua funcionando, desde que `envs/dev/network` ja tenha sido aplicado antes. Os comandos detalhados de deploy, validacao e destruicao estao em [docs/DEPLOY.md](docs/DEPLOY.md).
+
+Nos dominios `clientes` e `parceiros`, o `terraform apply` agora tambem faz uma invocacao inicial da Lambda de ingestao/orquestracao para iniciar o primeiro `Glue Workflow` sem depender do schedule diario.
 
 ## Validacao no Athena
 
@@ -151,6 +176,8 @@ Depois de aplicar `foundation` e os dominios desejados:
 3. Consulte as tabelas gold.
 
 Como varias tabelas usam `partition projection` com `pais = injected`, prefira consultas com `WHERE pais = 'BR'`.
+
+Se a consulta retornar vazia logo apos o `apply`, aguarde alguns minutos para o workflow inicial terminar e valide os `Glue Job Runs` do dominio.
 
 Exemplos:
 
@@ -168,6 +195,7 @@ Depois, valide a governanca assumindo as roles consumidoras e testando os workgr
 
 O custo atual depende fortemente dos dominios ativos:
 
+- `network` adiciona custo recorrente pequeno a moderado por causa dos `VPC Interface Endpoints` compartilhados
 - `clientes` e `parceiros` sao os dominios mais baratos
 - `contas` adiciona `RDS` e `DMS`
 - `transacoes` adiciona `MSK Provisioned` e `MSK Connect`
@@ -198,6 +226,8 @@ make destroy-domain DOMAIN=clientes
 
 No caso de `riscos`, o `Makefile` ja tenta pausar schedules e parar o Glue Streaming antes do `destroy`.
 
+Se voce estiver fazendo limpeza completa do ambiente, destrua a camada `network` apenas depois de remover `contas`, `transacoes` e `riscos`.
+
 ## Estrutura do repositorio
 
 ```text
@@ -217,6 +247,7 @@ No caso de `riscos`, o `Makefile` ja tenta pausar schedules e parar o Glue Strea
     └── dev
         ├── consumer-roles
         ├── foundation
+        ├── network
         └── domains
             ├── clientes
             ├── parceiros

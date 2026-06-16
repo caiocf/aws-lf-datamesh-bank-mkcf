@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import boto3
 import pg8000
 
@@ -45,7 +46,11 @@ def run_seed(db_host, db_port, db_name, user, password, sql_bucket, create_key, 
     return count
 
 
-def start_workflow(workflow_name):
+def start_workflow(workflow_name, delay_seconds=0):
+    if delay_seconds > 0:
+        print(f"Aguardando {delay_seconds}s para o DMS concluir a escrita no S3 antes de iniciar o workflow")
+        time.sleep(delay_seconds)
+
     glue = boto3.client('glue')
     run = glue.start_workflow_run(Name=workflow_name)
     print(f"Workflow {workflow_name} iniciado: {run['RunId']}")
@@ -54,6 +59,7 @@ def start_workflow(workflow_name):
 
 def handler(event, context):
     action = event.get('action', 'seed')
+    workflow_delay = int(os.environ.get('WORKFLOW_START_DELAY_SECONDS', '45'))
 
     if action == 'seed':
         secret_arn = os.environ['DB_SECRET_ARN']
@@ -75,10 +81,8 @@ def handler(event, context):
         return {"statusCode": 200, "body": msg}
 
     elif action == 'start_workflow':
-        import time
         workflow_name = os.environ['WORKFLOW_NAME']
-        time.sleep(10)
-        run_id = start_workflow(workflow_name)
+        run_id = start_workflow(workflow_name, workflow_delay)
         return {"statusCode": 200, "body": f"Workflow iniciado: {run_id}"}
 
     elif action == 'seed_and_workflow':
@@ -98,7 +102,7 @@ def handler(event, context):
             creds['username'], creds['password'],
             sql_bucket, create_table_key, seed_inserts_key
         )
-        run_id = start_workflow(workflow_name)
+        run_id = start_workflow(workflow_name, workflow_delay)
         msg = f"Seed: {count} registros. Workflow iniciado: {run_id}"
         print(msg)
         return {"statusCode": 200, "body": msg}

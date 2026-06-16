@@ -91,6 +91,25 @@ if exist "envs\%ENV%\consumer-roles\.terraform" (
 )
 echo.
 
+echo === FASE 4: DESTRUINDO NETWORK ===
+
+if exist "envs\%ENV%\network\.terraform" (
+    echo Destruindo Shared Network...
+    pushd "envs\%ENV%\network"
+    terraform destroy -auto-approve
+    set TF_EXIT=!errorlevel!
+    popd
+    if not "!TF_EXIT!"=="0" (
+        echo ERRO: terraform destroy falhou em Shared Network com exit code !TF_EXIT!.
+        popd >nul
+        exit /b !TF_EXIT!
+    )
+    echo Shared Network destruida.
+) else (
+    echo Shared Network nao inicializada, pulando...
+)
+echo.
+
 echo === VERIFICACAO FINAL ===
 echo Buckets S3 remanescentes:
 aws s3 ls 2>nul | findstr "lfmesh-%ENV%" || echo    Nenhum.

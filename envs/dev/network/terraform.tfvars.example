@@ -1,0 +1,9 @@
+aws_region   = "us-east-1"
+project_name = "lfmesh"
+environment  = "dev"
+
+# Este estado usa a default VPC da conta como baseline compartilhada do lab.
+# Aplique uma vez por ambiente antes de subir os dominios que dependem de rede:
+# - contas
+# - transacoes
+# - riscos

@@ -50,7 +50,7 @@ module "domain" {
           pii            = "no"
           s3_prefix      = "contas_raw/public/contas"
           columns = [
-            { name = "Op",            type = "string", comment = "CDC operation: I=Insert, U=Update, D=Delete" },
+            { name = "op",            type = "string", comment = "CDC operation: I=Insert, U=Update, D=Delete" },
             { name = "conta_id",      type = "string" },
             { name = "cliente_id",    type = "string" },
             { name = "tipo_conta",    type = "string" },

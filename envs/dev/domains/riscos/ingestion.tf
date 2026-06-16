@@ -20,32 +20,20 @@ locals {
   topic_name    = "txn.riscos.raw"
 }
 
-# --- Networking ---
+# --- Networking (shared network baseline) ---
 
-data "aws_vpc" "default" {
-  default = true
-}
+data "terraform_remote_state" "network" {
+  backend = "local"
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+  config = {
+    path = "${path.module}/../../network/terraform.tfstate"
   }
-
-  filter {
-    name   = "availability-zone"
-    values = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d", "us-east-1f"]
-  }
-}
-
-data "aws_subnet" "glue_connection" {
-  id = data.aws_subnets.default.ids[0]
 }
 
 resource "aws_security_group" "msk_serverless" {
   name        = "${local.name_prefix}-msk-sg"
   description = "SG para MSK Serverless e Glue Streaming do dominio riscos"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   ingress {
     from_port   = 0
@@ -87,14 +75,6 @@ resource "aws_security_group" "msk_serverless" {
     description     = "MSK Serverless bootstrap - Lambda"
   }
 
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    self        = true
-    description = "HTTPS for VPC Endpoints"
-  }
-
   egress {
     from_port   = 0
     to_port     = 0
@@ -108,15 +88,7 @@ resource "aws_security_group" "msk_serverless" {
 resource "aws_security_group" "lambda" {
   name        = "${local.name_prefix}-lambda-sg"
   description = "SG para Lambda producer do dominio riscos"
-  vpc_id      = data.aws_vpc.default.id
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    self        = true
-    description = "HTTPS - VPC Endpoints"
-  }
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   egress {
     from_port   = 0
@@ -128,34 +100,8 @@ resource "aws_security_group" "lambda" {
   tags = { Domain = "riscos", Layer = "ingestion" }
 }
 
-# --- VPC Endpoints ---
-# Em produção real (multi-account), cada conta teria sua própria VPC com seus endpoints.
-# No lab (conta única, VPC compartilhada), apenas o primeiro domínio deployado cria.
-# Se transacoes ou contas já estão deployados, setar create_vpc_endpoints = false.
-
-resource "aws_vpc_endpoint" "s3" {
-  count = var.create_vpc_endpoints ? 1 : 0
-
-  vpc_id            = data.aws_vpc.default.id
-  service_name      = "com.amazonaws.${var.aws_region}.s3"
-  vpc_endpoint_type = "Gateway"
-  route_table_ids   = [data.aws_vpc.default.main_route_table_id]
-
-  tags = { Domain = "riscos", Layer = "networking" }
-}
-
-resource "aws_vpc_endpoint" "glue" {
-  count = var.create_vpc_endpoints ? 1 : 0
-
-  vpc_id              = data.aws_vpc.default.id
-  service_name        = "com.amazonaws.${var.aws_region}.glue"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = slice(data.aws_subnets.default.ids, 0, 3)
-  security_group_ids  = [aws_security_group.msk_serverless.id]
-  private_dns_enabled = true
-
-  tags = { Domain = "riscos", Layer = "networking" }
-}
+# Shared endpoints are provisioned in envs/dev/network.
+# In the single-account lab, this domain only consumes the shared network baseline.
 
 # --- MSK Serverless ---
 
@@ -171,7 +117,7 @@ resource "aws_msk_serverless_cluster" "riscos" {
   }
 
   vpc_config {
-    subnet_ids         = slice(data.aws_subnets.default.ids, 0, 3)
+    subnet_ids         = data.terraform_remote_state.network.outputs.platform_subnet_ids
     security_group_ids = [aws_security_group.msk_serverless.id]
   }
 
@@ -277,7 +223,7 @@ resource "aws_lambda_function" "producer" {
   layers = [aws_lambda_layer_version.kafka_iam.arn]
 
   vpc_config {
-    subnet_ids         = slice(data.aws_subnets.default.ids, 0, 3)
+    subnet_ids         = data.terraform_remote_state.network.outputs.platform_subnet_ids
     security_group_ids = [aws_security_group.lambda.id]
   }
 
@@ -438,9 +384,9 @@ resource "aws_iam_policy" "glue_job_access" {
         Resource = ["*"]
       },
       {
-        Sid      = "EC2NetworkForConnection"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "EC2NetworkForConnection"
+        Effect = "Allow"
+        Action = [
           "ec2:DescribeVpcEndpoints",
           "ec2:DescribeSubnets",
           "ec2:DescribeSecurityGroups",
@@ -474,8 +420,8 @@ resource "aws_glue_connection" "msk_serverless" {
   connection_type = "NETWORK"
 
   physical_connection_requirements {
-    availability_zone      = data.aws_subnet.glue_connection.availability_zone
-    subnet_id              = data.aws_subnet.glue_connection.id
+    availability_zone      = data.terraform_remote_state.network.outputs.glue_connection_subnet_availability_zone
+    subnet_id              = data.terraform_remote_state.network.outputs.glue_connection_subnet_id
     security_group_id_list = [aws_security_group.msk_serverless.id]
   }
 
@@ -502,17 +448,17 @@ resource "aws_glue_job" "streaming_to_bronze" {
   }
 
   default_arguments = {
-    "--JOB_NAME"               = "${local.name_prefix}-streaming-to-bronze"
-    "--target_bucket"          = local.bronze_bucket
-    "--target_prefix"          = "riscos_raw"
-    "--msk_bootstrap_servers"  = aws_msk_serverless_cluster.riscos.bootstrap_brokers_sasl_iam
-    "--topic_name"             = local.topic_name
-    "--msk_connection_name"    = aws_glue_connection.msk_serverless.name
-    "--window_size"            = "60 seconds"
-    "--consumer_group_prefix"  = "${local.name_prefix}-streaming-to-bronze"
-    "--enable-metrics"         = "true"
+    "--JOB_NAME"                         = "${local.name_prefix}-streaming-to-bronze"
+    "--target_bucket"                    = local.bronze_bucket
+    "--target_prefix"                    = "riscos_raw"
+    "--msk_bootstrap_servers"            = aws_msk_serverless_cluster.riscos.bootstrap_brokers_sasl_iam
+    "--topic_name"                       = local.topic_name
+    "--msk_connection_name"              = aws_glue_connection.msk_serverless.name
+    "--window_size"                      = "60 seconds"
+    "--consumer_group_prefix"            = "${local.name_prefix}-streaming-to-bronze"
+    "--enable-metrics"                   = "true"
     "--enable-continuous-cloudwatch-log" = "true"
-    "--continuous-log-logGroup" = aws_cloudwatch_log_group.glue_streaming.name
+    "--continuous-log-logGroup"          = aws_cloudwatch_log_group.glue_streaming.name
   }
 
   connections = [aws_glue_connection.msk_serverless.name]

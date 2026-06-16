@@ -14,6 +14,7 @@ endif
 .PHONY: cleanup cleanup-windows stop-riscos-runtime
 .PHONY: init-consumer-roles plan-consumer-roles apply-consumer-roles destroy-consumer-roles
 .PHONY: init-foundation plan-foundation apply-foundation destroy-foundation
+.PHONY: init-network plan-network apply-network destroy-network
 .PHONY: init-domain plan-domain apply-domain destroy-domain
 
 cleanup:
@@ -66,6 +67,18 @@ apply-foundation:
 
 destroy-foundation:
 	cd envs/$(ENV)/foundation && terraform destroy
+
+init-network:
+	cd envs/$(ENV)/network && terraform init
+
+plan-network:
+	cd envs/$(ENV)/network && terraform plan
+
+apply-network:
+	cd envs/$(ENV)/network && terraform apply
+
+destroy-network:
+	cd envs/$(ENV)/network && terraform destroy
 
 init-domain:
 	cd envs/$(ENV)/domains/$(DOMAIN) && terraform init

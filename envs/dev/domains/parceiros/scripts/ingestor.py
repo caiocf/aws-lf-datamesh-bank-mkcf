@@ -7,12 +7,29 @@ from io import BytesIO
 from datetime import date
 import os
 
+ACTIVE_STATES = {"RUNNING", "STOPPING"}
+
+
+def get_active_workflow_run(glue_client, workflow_name):
+    runs = glue_client.get_workflow_runs(
+        Name=workflow_name,
+        IncludeGraph=False,
+        MaxResults=5,
+    ).get('Runs', [])
+
+    for run in runs:
+        status = run.get('Status', '')
+        if status in ACTIVE_STATES:
+            return run.get('WorkflowRunId'), status
+
+    return None, None
+
 
 def handler(event, context):
     api_url = os.environ['API_URL']
     target_bucket = os.environ['TARGET_BUCKET']
     target_prefix = os.environ['TARGET_PREFIX']
-    workflow_name = os.environ['WORKFLOW_NAME']
+    workflow_name = os.environ['GLUE_WORKFLOW_NAME']
 
     # 1. Chama API mock
     req = urllib.request.Request(api_url)
@@ -27,8 +44,9 @@ def handler(event, context):
     # 2. Agrupa por pais e grava Parquet particionado
     by_pais = {}
     for p in parceiros:
-        pais = p.pop('pais')
-        by_pais.setdefault(pais, []).append(p)
+        pais = p['pais']
+        record = {key: value for key, value in p.items() if key != 'pais'}
+        by_pais.setdefault(pais, []).append(record)
 
     s3 = boto3.client('s3')
     for pais_val, records in by_pais.items():
@@ -54,7 +72,27 @@ def handler(event, context):
 
     # 3. Dispara Glue Workflow
     glue = boto3.client('glue')
+    active_run_id, active_status = get_active_workflow_run(glue, workflow_name)
+    if active_run_id:
+        print(f"Workflow {workflow_name} ja possui run ativo {active_run_id} com status {active_status}")
+        return {
+            "statusCode": 200,
+            "body": json.dumps({
+                "parceiros_ingeridos": len(parceiros),
+                "workflow_run": active_run_id,
+                "workflow_status": active_status,
+                "started_new_run": False
+            })
+        }
+
     run = glue.start_workflow_run(Name=workflow_name)
     print(f"Workflow {workflow_name} disparado: {run['RunId']}")
 
-    return {"statusCode": 200, "body": json.dumps({"parceiros_ingeridos": len(parceiros), "workflow_run": run['RunId']})}
+    return {
+        "statusCode": 200,
+        "body": json.dumps({
+            "parceiros_ingeridos": len(parceiros),
+            "workflow_run": run['RunId'],
+            "started_new_run": True
+        })
+    }

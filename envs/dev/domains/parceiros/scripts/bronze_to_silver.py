@@ -15,7 +15,7 @@ source_path = f"s3://{args['source_bucket']}/{args['source_prefix']}/"
 target_path = f"s3://{args['target_bucket']}/{args['target_prefix']}/"
 
 # Lê bronze completo com detecção de partições Hive (pais, dt_ingest como colunas)
-df_bronze = spark.read.option("basePath", source_path).parquet(source_path + "*/*/*.parquet")
+df_bronze = spark.read.option("basePath", source_path).parquet(source_path)
 
 bronze_count = df_bronze.count()
 print(f"Bronze: {bronze_count} registros")
