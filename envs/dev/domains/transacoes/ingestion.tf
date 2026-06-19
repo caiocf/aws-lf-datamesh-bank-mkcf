@@ -7,13 +7,14 @@
 #
 
 locals {
-  name_prefix   = "${var.project_name}-${var.environment}-transacoes"
-  account_id    = data.aws_caller_identity.current.account_id
-  bronze_bucket = "${var.project_name}-${var.environment}-transacoes-bronze-${local.account_id}"
-  silver_bucket = "${var.project_name}-${var.environment}-transacoes-silver-${local.account_id}"
-  gold_bucket   = "${var.project_name}-${var.environment}-transacoes-gold-${local.account_id}"
-  topic_name    = "txn.transacoes.raw"
-  msk_username  = "producer-user"
+  name_prefix           = "${var.project_name}-${var.environment}-transacoes"
+  account_id            = data.aws_caller_identity.current.account_id
+  bronze_bucket         = "${var.project_name}-${var.environment}-transacoes-bronze-${local.account_id}"
+  silver_bucket         = "${var.project_name}-${var.environment}-transacoes-silver-${local.account_id}"
+  gold_bucket           = "${var.project_name}-${var.environment}-transacoes-gold-${local.account_id}"
+  topic_name            = "txn.transacoes.raw"
+  msk_username          = "producer-user"
+  log_retention_in_days = var.log_retention_in_days
 }
 
 # --- Networking (shared network baseline) ---
@@ -222,7 +223,7 @@ resource "aws_msk_cluster" "transacoes" {
 
 resource "aws_cloudwatch_log_group" "msk_broker" {
   name              = "/aws/msk/${local.name_prefix}"
-  retention_in_days = 3
+  retention_in_days = local.log_retention_in_days
   tags              = { Domain = "transacoes", Layer = "ingestion" }
 }
 
@@ -343,6 +344,12 @@ resource "aws_iam_role_policy_attachment" "lambda_producer_secrets" {
   policy_arn = aws_iam_policy.lambda_producer_secrets.arn
 }
 
+resource "aws_cloudwatch_log_group" "lambda_producer" {
+  name              = "/aws/lambda/${local.name_prefix}-producer"
+  retention_in_days = local.log_retention_in_days
+  tags              = { Domain = "transacoes", Layer = "ingestion" }
+}
+
 resource "aws_lambda_function" "producer" {
   function_name    = "${local.name_prefix}-producer"
   role             = aws_iam_role.lambda_producer.arn
@@ -373,7 +380,13 @@ resource "aws_lambda_function" "producer" {
 
   tags = { Domain = "transacoes", Layer = "ingestion" }
 
-  depends_on = [aws_msk_scram_secret_association.transacoes]
+  depends_on = [
+    aws_msk_scram_secret_association.transacoes,
+    aws_cloudwatch_log_group.lambda_producer,
+    aws_iam_role_policy_attachment.lambda_producer_basic,
+    aws_iam_role_policy_attachment.lambda_producer_vpc,
+    aws_iam_role_policy_attachment.lambda_producer_secrets
+  ]
 }
 
 # Invoca producer 1x para criar topico antes do Connector
@@ -447,7 +460,7 @@ EOT
 
 resource "aws_cloudwatch_log_group" "msk_connect" {
   name              = "/aws/msk-connect/${local.name_prefix}"
-  retention_in_days = 3
+  retention_in_days = local.log_retention_in_days
   tags              = { Domain = "transacoes", Layer = "ingestion" }
 }
 

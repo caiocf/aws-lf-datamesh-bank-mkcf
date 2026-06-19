@@ -7,13 +7,14 @@
 #
 
 locals {
-  name_prefix   = "${var.project_name}-${var.environment}-contas"
-  account_id    = data.aws_caller_identity.current.account_id
-  bronze_bucket = "${var.project_name}-${var.environment}-contas-bronze-${local.account_id}"
-  silver_bucket = "${var.project_name}-${var.environment}-contas-silver-${local.account_id}"
-  gold_bucket   = "${var.project_name}-${var.environment}-contas-gold-${local.account_id}"
-  db_name       = "contasdb"
-  db_username   = "admin_contas"
+  name_prefix           = "${var.project_name}-${var.environment}-contas"
+  account_id            = data.aws_caller_identity.current.account_id
+  bronze_bucket         = "${var.project_name}-${var.environment}-contas-bronze-${local.account_id}"
+  silver_bucket         = "${var.project_name}-${var.environment}-contas-silver-${local.account_id}"
+  gold_bucket           = "${var.project_name}-${var.environment}-contas-gold-${local.account_id}"
+  db_name               = "contasdb"
+  db_username           = "admin_contas"
+  log_retention_in_days = var.log_retention_in_days
 }
 
 # --- Secrets Manager (secret unico para RDS, DMS e Lambda) ---
@@ -60,9 +61,24 @@ resource "aws_security_group" "rds" {
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "PostgreSQL access"
+    cidr_blocks = [data.terraform_remote_state.network.outputs.vpc_cidr_block]
+    description = "PostgreSQL access from inside the lab VPC"
   }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Domain = "contas", Layer = "ingestion" }
+}
+
+resource "aws_security_group" "lambda_seed" {
+  name        = "${local.name_prefix}-lambda-seed-sg"
+  description = "SG para a Lambda seed do dominio contas"
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   egress {
     from_port   = 0
@@ -119,7 +135,7 @@ resource "aws_db_instance" "contas" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   parameter_group_name   = aws_db_parameter_group.contas.name
 
-  publicly_accessible = true
+  publicly_accessible = false
   skip_final_snapshot = true
   deletion_protection = false
 
@@ -423,6 +439,11 @@ resource "aws_iam_role_policy_attachment" "lambda_seed_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy_attachment" "lambda_seed_vpc" {
+  role       = aws_iam_role.lambda_seed.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 resource "aws_iam_policy" "lambda_seed_access" {
   name = "${local.name_prefix}-db-seed-access"
   policy = jsonencode({
@@ -455,6 +476,12 @@ resource "aws_iam_role_policy_attachment" "lambda_seed_access" {
   policy_arn = aws_iam_policy.lambda_seed_access.arn
 }
 
+resource "aws_cloudwatch_log_group" "lambda_db_seed" {
+  name              = "/aws/lambda/${local.name_prefix}-db-seed"
+  retention_in_days = local.log_retention_in_days
+  tags              = { Domain = "contas", Layer = "ingestion" }
+}
+
 resource "aws_lambda_function" "db_seed" {
   function_name    = "${local.name_prefix}-db-seed"
   role             = aws_iam_role.lambda_seed.arn
@@ -467,23 +494,34 @@ resource "aws_lambda_function" "db_seed" {
 
   layers = ["arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:15"]
 
+  vpc_config {
+    subnet_ids         = data.terraform_remote_state.network.outputs.platform_subnet_ids
+    security_group_ids = [aws_security_group.lambda_seed.id]
+  }
+
   environment {
     variables = {
-      DB_SECRET_ARN        = aws_secretsmanager_secret.db_credentials.arn
-      DB_HOST              = aws_db_instance.contas.address
-      DB_PORT              = "5432"
-      DB_NAME              = local.db_name
-      SQL_BUCKET           = aws_s3_bucket.scripts.id
-      SQL_CREATE_TABLE_KEY = "sql/create_table.sql"
-      SQL_SEED_INSERTS_KEY = "sql/seed_inserts.sql"
-      WORKFLOW_NAME        = aws_glue_workflow.contas_pipeline.name
+      DB_SECRET_ARN                = aws_secretsmanager_secret.db_credentials.arn
+      DB_HOST                      = aws_db_instance.contas.address
+      DB_PORT                      = "5432"
+      DB_NAME                      = local.db_name
+      SQL_BUCKET                   = aws_s3_bucket.scripts.id
+      SQL_CREATE_TABLE_KEY         = "sql/create_table.sql"
+      SQL_SEED_INSERTS_KEY         = "sql/seed_inserts.sql"
+      WORKFLOW_NAME                = aws_glue_workflow.contas_pipeline.name
       WORKFLOW_START_DELAY_SECONDS = "45"
     }
   }
 
   tags = { Domain = "contas", Layer = "ingestion" }
 
-  depends_on = [aws_db_instance.contas]
+  depends_on = [
+    aws_db_instance.contas,
+    aws_cloudwatch_log_group.lambda_db_seed,
+    aws_iam_role_policy_attachment.lambda_seed_basic,
+    aws_iam_role_policy_attachment.lambda_seed_vpc,
+    aws_iam_role_policy_attachment.lambda_seed_access
+  ]
 }
 
 resource "aws_lambda_invocation" "db_seed" {

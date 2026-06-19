@@ -106,6 +106,7 @@ terraform apply
 Observacao:
 
 - o deploy cria `API Gateway`, Lambda ingestor, `EventBridge` e workflow Glue
+- o API Gateway grava access logs no CloudWatch para auditoria
 - o `terraform apply` invoca a Lambda uma vez para semear a primeira carga
 - depois disso, o schedule diario continua disparando a Lambda, que grava no bronze e inicia o workflow
 
@@ -121,6 +122,7 @@ terraform apply
 Observacao:
 
 - este dominio cria `RDS PostgreSQL`, `DMS`, `Secrets Manager` e jobs Glue
+- a Lambda seed executa dentro da VPC compartilhada (via `network`) para conectar ao RDS de forma privada
 - o deploy demora mais do que `clientes` e `parceiros`
 
 ### 5.4 transacoes

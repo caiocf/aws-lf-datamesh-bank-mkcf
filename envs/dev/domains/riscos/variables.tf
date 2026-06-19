@@ -12,3 +12,9 @@ variable "environment" {
   type    = string
   default = "dev"
 }
+
+variable "log_retention_in_days" {
+  description = "Dias de retencao dos logs no CloudWatch."
+  type        = number
+  default     = 3
+}

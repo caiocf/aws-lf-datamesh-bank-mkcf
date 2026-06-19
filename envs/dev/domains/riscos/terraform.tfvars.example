@@ -3,3 +3,5 @@ project_name = "lfmesh"
 environment  = "dev"
 
 # Requer a camada compartilhada envs/dev/network aplicada antes do plan/apply.
+
+# log_retention_in_days = 3

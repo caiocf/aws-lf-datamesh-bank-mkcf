@@ -8,11 +8,12 @@
 #
 
 locals {
-  name_prefix   = "${var.project_name}-${var.environment}-parceiros"
-  account_id    = data.aws_caller_identity.current.account_id
-  bronze_bucket = "${var.project_name}-${var.environment}-parceiros-bronze-${local.account_id}"
-  silver_bucket = "${var.project_name}-${var.environment}-parceiros-silver-${local.account_id}"
-  gold_bucket   = "${var.project_name}-${var.environment}-parceiros-gold-${local.account_id}"
+  name_prefix           = "${var.project_name}-${var.environment}-parceiros"
+  account_id            = data.aws_caller_identity.current.account_id
+  bronze_bucket         = "${var.project_name}-${var.environment}-parceiros-bronze-${local.account_id}"
+  silver_bucket         = "${var.project_name}-${var.environment}-parceiros-silver-${local.account_id}"
+  gold_bucket           = "${var.project_name}-${var.environment}-parceiros-gold-${local.account_id}"
+  log_retention_in_days = var.log_retention_in_days
 }
 
 # ─── Lambda: API Mock ──────────────────────────────────────────────────────────
@@ -43,6 +44,12 @@ resource "aws_iam_role_policy_attachment" "lambda_api_mock_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_cloudwatch_log_group" "lambda_api_mock" {
+  name              = "/aws/lambda/${local.name_prefix}-api-mock"
+  retention_in_days = local.log_retention_in_days
+  tags              = { Domain = "parceiros", Layer = "ingestion" }
+}
+
 resource "aws_lambda_function" "api_mock" {
   function_name    = "${local.name_prefix}-api-mock"
   role             = aws_iam_role.lambda_api_mock.arn
@@ -53,6 +60,11 @@ resource "aws_lambda_function" "api_mock" {
   source_code_hash = data.archive_file.api_mock.output_base64sha256
 
   tags = { Domain = "parceiros", Layer = "ingestion" }
+
+  depends_on = [
+    aws_cloudwatch_log_group.lambda_api_mock,
+    aws_iam_role_policy_attachment.lambda_api_mock_basic
+  ]
 }
 
 # ─── API Gateway REST ──────────────────────────────────────────────────────────
@@ -62,6 +74,38 @@ resource "aws_api_gateway_rest_api" "parceiros_mock" {
   description = "API Mock para ingestão de parceiros"
 
   tags = { Domain = "parceiros", Layer = "ingestion" }
+}
+
+resource "aws_cloudwatch_log_group" "api_gateway_access" {
+  name              = "/aws/apigateway/${local.name_prefix}-access"
+  retention_in_days = local.log_retention_in_days
+  tags              = { Domain = "parceiros", Layer = "ingestion" }
+}
+
+resource "aws_iam_role" "api_gateway_cloudwatch" {
+  name = "${local.name_prefix}-apigw-cloudwatch"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "apigateway.amazonaws.com" }
+    }]
+  })
+
+  tags = { Domain = "parceiros", Layer = "ingestion" }
+}
+
+resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
+  role       = aws_iam_role.api_gateway_cloudwatch.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+resource "aws_api_gateway_account" "cloudwatch" {
+  cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+
+  depends_on = [aws_iam_role_policy_attachment.api_gateway_cloudwatch]
 }
 
 resource "aws_api_gateway_resource" "parceiros" {
@@ -109,7 +153,25 @@ resource "aws_api_gateway_stage" "prod" {
   rest_api_id   = aws_api_gateway_rest_api.parceiros_mock.id
   stage_name    = "prod"
 
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway_access.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      caller         = "$context.identity.caller"
+      user           = "$context.identity.user"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      resourcePath   = "$context.resourcePath"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+    })
+  }
+
   tags = { Domain = "parceiros", Layer = "ingestion" }
+
+  depends_on = [aws_api_gateway_account.cloudwatch]
 }
 
 # ─── Lambda: Ingestor ──────────────────────────────────────────────────────────
@@ -140,6 +202,12 @@ resource "aws_iam_role_policy_attachment" "lambda_ingestor_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_cloudwatch_log_group" "lambda_ingestor" {
+  name              = "/aws/lambda/${local.name_prefix}-ingestor"
+  retention_in_days = local.log_retention_in_days
+  tags              = { Domain = "parceiros", Layer = "ingestion" }
+}
+
 resource "aws_iam_policy" "lambda_ingestor_access" {
   name = "${local.name_prefix}-ingestor-access"
   policy = jsonencode({
@@ -152,9 +220,9 @@ resource "aws_iam_policy" "lambda_ingestor_access" {
         Resource = ["arn:aws:s3:::${local.bronze_bucket}", "arn:aws:s3:::${local.bronze_bucket}/*"]
       },
       {
-        Sid      = "StartGlueWorkflow"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "StartGlueWorkflow"
+        Effect = "Allow"
+        Action = [
           "glue:GetWorkflowRuns",
           "glue:StartWorkflowRun"
         ]
@@ -193,6 +261,12 @@ resource "aws_lambda_function" "ingestor" {
   }
 
   tags = { Domain = "parceiros", Layer = "ingestion" }
+
+  depends_on = [
+    aws_cloudwatch_log_group.lambda_ingestor,
+    aws_iam_role_policy_attachment.lambda_ingestor_basic,
+    aws_iam_role_policy_attachment.lambda_ingestor_access
+  ]
 }
 
 resource "aws_lambda_invocation" "seed_ingestion" {

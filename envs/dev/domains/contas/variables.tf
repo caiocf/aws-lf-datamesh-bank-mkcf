@@ -13,6 +13,12 @@ variable "environment" {
   default = "dev"
 }
 
+variable "log_retention_in_days" {
+  description = "Dias de retencao dos logs no CloudWatch."
+  type        = number
+  default     = 3
+}
+
 variable "dms_serverless" {
   description = "Usar DMS Serverless (true) ou Provisionado (false). Provisionado e mais rapido para criar/destruir no lab."
   type        = bool

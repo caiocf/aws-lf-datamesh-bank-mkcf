@@ -12,12 +12,13 @@
 #
 
 locals {
-  name_prefix   = "${var.project_name}-${var.environment}-riscos"
-  account_id    = data.aws_caller_identity.current.account_id
-  bronze_bucket = "${var.project_name}-${var.environment}-riscos-bronze-${local.account_id}"
-  silver_bucket = "${var.project_name}-${var.environment}-riscos-silver-${local.account_id}"
-  gold_bucket   = "${var.project_name}-${var.environment}-riscos-gold-${local.account_id}"
-  topic_name    = "txn.riscos.raw"
+  name_prefix           = "${var.project_name}-${var.environment}-riscos"
+  account_id            = data.aws_caller_identity.current.account_id
+  bronze_bucket         = "${var.project_name}-${var.environment}-riscos-bronze-${local.account_id}"
+  silver_bucket         = "${var.project_name}-${var.environment}-riscos-silver-${local.account_id}"
+  gold_bucket           = "${var.project_name}-${var.environment}-riscos-gold-${local.account_id}"
+  topic_name            = "txn.riscos.raw"
+  log_retention_in_days = var.log_retention_in_days
 }
 
 # --- Networking (shared network baseline) ---
@@ -210,6 +211,12 @@ resource "aws_iam_role_policy_attachment" "lambda_producer_msk" {
   policy_arn = aws_iam_policy.lambda_producer_msk.arn
 }
 
+resource "aws_cloudwatch_log_group" "lambda_producer" {
+  name              = "/aws/lambda/${local.name_prefix}-producer"
+  retention_in_days = local.log_retention_in_days
+  tags              = { Domain = "riscos", Layer = "ingestion" }
+}
+
 resource "aws_lambda_function" "producer" {
   function_name    = "${local.name_prefix}-producer"
   role             = aws_iam_role.lambda_producer.arn
@@ -237,6 +244,13 @@ resource "aws_lambda_function" "producer" {
   }
 
   tags = { Domain = "riscos", Layer = "ingestion" }
+
+  depends_on = [
+    aws_cloudwatch_log_group.lambda_producer,
+    aws_iam_role_policy_attachment.lambda_producer_basic,
+    aws_iam_role_policy_attachment.lambda_producer_vpc,
+    aws_iam_role_policy_attachment.lambda_producer_msk
+  ]
 }
 
 # Invoca 1x para criar topico
@@ -432,7 +446,7 @@ resource "aws_glue_connection" "msk_serverless" {
 
 resource "aws_cloudwatch_log_group" "glue_streaming" {
   name              = "/aws-glue/jobs/${local.name_prefix}-streaming"
-  retention_in_days = 3
+  retention_in_days = local.log_retention_in_days
   tags              = { Domain = "riscos", Layer = "ingestion" }
 }
 
@@ -515,6 +529,12 @@ resource "aws_iam_role_policy_attachment" "lambda_start_streaming_job_access" {
   policy_arn = aws_iam_policy.lambda_start_streaming_job_access.arn
 }
 
+resource "aws_cloudwatch_log_group" "lambda_start_streaming_job" {
+  name              = "/aws/lambda/${local.name_prefix}-start-streaming-job"
+  retention_in_days = local.log_retention_in_days
+  tags              = { Domain = "riscos", Layer = "orchestration" }
+}
+
 resource "aws_lambda_function" "start_streaming_job" {
   function_name    = "${local.name_prefix}-start-streaming-job"
   role             = aws_iam_role.lambda_start_streaming_job.arn
@@ -532,6 +552,12 @@ resource "aws_lambda_function" "start_streaming_job" {
   }
 
   tags = { Domain = "riscos", Layer = "orchestration" }
+
+  depends_on = [
+    aws_cloudwatch_log_group.lambda_start_streaming_job,
+    aws_iam_role_policy_attachment.lambda_start_streaming_job_basic,
+    aws_iam_role_policy_attachment.lambda_start_streaming_job_access
+  ]
 }
 
 resource "aws_lambda_invocation" "start_streaming_job" {

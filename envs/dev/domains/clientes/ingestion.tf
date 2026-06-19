@@ -7,11 +7,12 @@
 #
 
 locals {
-  landing_bucket_name = "${var.project_name}-${var.environment}-clientes-landing-${data.aws_caller_identity.current.account_id}"
-  scripts_prefix      = "scripts"
-  job_name            = "${var.project_name}-${var.environment}-clientes-csv-to-parquet"
-  source_key          = "clientes/clientes_raw.csv"
-  workflow_starter    = "${var.project_name}-${var.environment}-clientes-workflow-starter"
+  landing_bucket_name   = "${var.project_name}-${var.environment}-clientes-landing-${data.aws_caller_identity.current.account_id}"
+  scripts_prefix        = "scripts"
+  job_name              = "${var.project_name}-${var.environment}-clientes-csv-to-parquet"
+  source_key            = "clientes/clientes_raw.csv"
+  workflow_starter      = "${var.project_name}-${var.environment}-clientes-workflow-starter"
+  log_retention_in_days = var.log_retention_in_days
 }
 
 # ─── S3: Landing Zone ──────────────────────────────────────────────────────────
@@ -159,9 +160,9 @@ resource "aws_iam_policy" "lambda_workflow_starter_access" {
         ]
       },
       {
-        Sid      = "StartGlueWorkflow"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "StartGlueWorkflow"
+        Effect = "Allow"
+        Action = [
           "glue:GetWorkflowRuns",
           "glue:StartWorkflowRun"
         ]
@@ -174,6 +175,15 @@ resource "aws_iam_policy" "lambda_workflow_starter_access" {
 resource "aws_iam_role_policy_attachment" "lambda_workflow_starter_access" {
   role       = aws_iam_role.lambda_workflow_starter.name
   policy_arn = aws_iam_policy.lambda_workflow_starter_access.arn
+}
+
+resource "aws_cloudwatch_log_group" "lambda_workflow_starter" {
+  name              = "/aws/lambda/${local.workflow_starter}"
+  retention_in_days = local.log_retention_in_days
+  tags = {
+    Domain = "clientes"
+    Layer  = "orchestration"
+  }
 }
 
 resource "aws_lambda_function" "workflow_starter" {
@@ -198,6 +208,12 @@ resource "aws_lambda_function" "workflow_starter" {
     Domain = "clientes"
     Layer  = "orchestration"
   }
+
+  depends_on = [
+    aws_cloudwatch_log_group.lambda_workflow_starter,
+    aws_iam_role_policy_attachment.lambda_workflow_starter_basic,
+    aws_iam_role_policy_attachment.lambda_workflow_starter_access
+  ]
 }
 
 # ─── Glue Job: Python Shell ───────────────────────────────────────────────────
