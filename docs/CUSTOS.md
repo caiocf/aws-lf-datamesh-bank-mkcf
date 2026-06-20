@@ -25,7 +25,7 @@ Hoje, os maiores drivers de custo sao:
 | Estado ou dominio | Recursos principais | Perfil de custo |
 | --- | --- | --- |
 | `network` | `S3 Gateway Endpoint` + `Glue Interface Endpoint` + `Secrets Manager Interface Endpoint` | recorrente baixo a moderado |
-| `clientes` | S3 + Glue Python Shell + Athena | baixo, custo por execucao |
+| `clientes` | S3 + Glue ETL PySpark + Athena | baixo a moderado, custo por execucao |
 | `parceiros` | API Gateway + Lambda + 2 jobs Glue | baixo a moderado, custo por execucao |
 | `contas` | RDS `db.t3.micro` + DMS `dms.t3.small` + Secrets Manager + Glue | recorrente, mesmo parado |
 | `transacoes` | MSK Provisioned + MSK Connect + Secret + KMS + Glue | recorrente e significativo |

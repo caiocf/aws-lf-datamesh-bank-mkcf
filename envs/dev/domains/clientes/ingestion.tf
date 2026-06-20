@@ -458,6 +458,34 @@ data "aws_iam_policy_document" "glue_job_gold_access" {
     ]
   }
 
+  # Leitura nos buckets gold de outros dominios (joins cross-dominio)
+  statement {
+    sid     = "ReadCrossDomainGold"
+    actions = ["s3:GetObject", "s3:ListBucket"]
+    resources = [
+      "arn:aws:s3:::${var.project_name}-${var.environment}-contas-gold-${data.aws_caller_identity.current.account_id}",
+      "arn:aws:s3:::${var.project_name}-${var.environment}-contas-gold-${data.aws_caller_identity.current.account_id}/*",
+      "arn:aws:s3:::${var.project_name}-${var.environment}-transacoes-gold-${data.aws_caller_identity.current.account_id}",
+      "arn:aws:s3:::${var.project_name}-${var.environment}-transacoes-gold-${data.aws_caller_identity.current.account_id}/*",
+      "arn:aws:s3:::${var.project_name}-${var.environment}-riscos-gold-${data.aws_caller_identity.current.account_id}",
+      "arn:aws:s3:::${var.project_name}-${var.environment}-riscos-gold-${data.aws_caller_identity.current.account_id}/*"
+    ]
+  }
+
+  # Glue Catalog (leitura de tabelas de outros dominios para joins cross-dominio)
+  statement {
+    sid     = "GlueCatalogRead"
+    actions = ["glue:GetTable", "glue:GetTables", "glue:GetDatabase", "glue:GetDatabases", "glue:GetPartition", "glue:GetPartitions"]
+    resources = ["*"]
+  }
+
+  # Lake Formation GetDataAccess (credential vending para leitura cross-dominio)
+  statement {
+    sid       = "LakeFormationDataAccess"
+    actions   = ["lakeformation:GetDataAccess"]
+    resources = ["*"]
+  }
+
   # Leitura do script
   statement {
     sid       = "ReadScript"
@@ -514,6 +542,39 @@ resource "aws_glue_job" "silver_to_gold" {
   tags = {
     Domain = "clientes"
     Layer  = "transformation"
+  }
+}
+
+# --- Lake Formation: grants cross-dominio para o Glue Job de clientes ---
+# Permite que o job leia tabelas gold de contas e transacoes para enriquecer cliente_360
+
+resource "aws_lakeformation_permissions" "glue_job_read_contas_gold" {
+  principal   = aws_iam_role.glue_job.arn
+  permissions = ["SELECT", "DESCRIBE"]
+
+  table {
+    database_name = "dev_gold_contas"
+    name          = "contas_ativas"
+  }
+}
+
+resource "aws_lakeformation_permissions" "glue_job_read_transacoes_gold" {
+  principal   = aws_iam_role.glue_job.arn
+  permissions = ["SELECT", "DESCRIBE"]
+
+  table {
+    database_name = "dev_gold_transacoes"
+    name          = "transacoes_curated"
+  }
+}
+
+resource "aws_lakeformation_permissions" "glue_job_read_riscos_gold" {
+  principal   = aws_iam_role.glue_job.arn
+  permissions = ["SELECT", "DESCRIBE"]
+
+  table {
+    database_name = "dev_gold_riscos"
+    name          = "alertas_fraude"
   }
 }
 

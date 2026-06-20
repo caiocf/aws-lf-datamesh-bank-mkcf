@@ -94,7 +94,7 @@ O dominio `clientes` implementa mascaramento de PII como padrao de referencia:
 - **Silver**: campos originais mantidos + colunas `cpf_hash` e `email_hash` (SHA256 com salt irreversivel) para joins tecnicos
 - **Gold**: campos `cpf` e `email` substituidos por versoes mascaradas (`***.***.***-XX`, `x***@dominio`) e hashes. O dado original nao existe na camada exposta
 
-Resultado: nenhuma persona consumidora ve CPF ou email em texto claro, mesmo com acesso direto ao S3. Data Science pode fazer joins cross-dominio via hash. Detalhes em [docs/MASCARAMENTO.md](docs/MASCARAMENTO.md).
+Resultado: nenhuma persona consumidora ve CPF ou email em texto claro, mesmo com acesso direto ao S3. O campo `nome` permanece em claro na gold por decisao de design (necessario para risco-fraude e auditoria), mas e controlado por Data Cells Filter — `bi` e `data-science` nao o veem. Data Science pode fazer joins cross-dominio via hash. Detalhes em [docs/MASCARAMENTO.md](docs/MASCARAMENTO.md).
 
 ### Exemplos de governanca implementada
 
@@ -250,7 +250,7 @@ SELECT * FROM dev_gold_transacoes.transacoes_curated WHERE pais = 'BR' LIMIT 10;
 SELECT * FROM dev_gold_riscos.alertas_fraude WHERE pais = 'BR' LIMIT 10;
 ```
 
-Depois, valide a governanca assumindo as roles consumidoras e testando os workgroups correspondentes.
+Depois, valide a governanca assumindo as roles consumidoras e testando os workgroups correspondentes. Para detalhes completos dos testes, veja [docs/VALIDACAO-END-TO-END.md](docs/VALIDACAO-END-TO-END.md).
 
 ## Custos
 
@@ -301,7 +301,8 @@ Se voce estiver fazendo limpeza completa do ambiente, destrua a camada `network`
 │   ├── DEPLOY.md
 │   ├── MASCARAMENTO.md
 │   ├── MODELO-MULTI-ACCOUNT-REAL.md
-│   └── PLANO-INGESTAO.md
+│   ├── PLANO-INGESTAO.md
+│   └── VALIDACAO-END-TO-END.md
 ├── modules
 │   ├── consumer-roles
 │   ├── foundation

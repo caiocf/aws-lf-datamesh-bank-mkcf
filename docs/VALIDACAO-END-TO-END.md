@@ -10,14 +10,14 @@ Este documento registra os testes executados para validar o funcionamento comple
 
 ---
 
-## 1. Pipeline clientes — dados mascarados na gold
+## 1. Pipeline clientes — visao 360 com dados cross-dominio e mascaramento PII
 
 ### Comando
 
 ```bash
 # Workgroup: lfmesh-dev-auditoria (admin full access)
 aws athena start-query-execution \
-  --query-string "SELECT cliente_id, nome, cpf_masked, cpf_hash, email_masked, email_hash, segmento FROM dev_gold_clientes.cliente_360 WHERE pais = 'BR' LIMIT 5" \
+  --query-string "SELECT * FROM dev_gold_clientes.cliente_360 WHERE pais = 'BR' LIMIT 5" \
   --work-group "lfmesh-dev-auditoria"
 ```
 
@@ -27,16 +27,21 @@ aws athena start-query-execution \
 - Coluna `email_masked` com formato `x***@dominio`
 - Coluna `cpf_hash` e `email_hash` com SHA256 de 64 caracteres (hash com salt)
 - Colunas `cpf` e `email` originais **nao existem** na tabela
+- `total_contas` preenchido com dados reais do dominio `contas` (join por cliente_id)
+- `volume_transacoes` e `ultima_transacao` preenchidos com dados reais do dominio `transacoes`
+- `score_risco` preenchido com max score do dominio `riscos`
 
 ### Resultado obtido
 
-| cliente_id | nome | cpf_masked | cpf_hash | email_masked | email_hash | segmento |
-|---|---|---|---|---|---|---|
-| c001 | Ana Silva | ***.***.***-11 | 534a4a8e... | a***@example.com | 8e43ca37... | alta_renda |
-| c002 | Bruno Souza | ***.***.***-22 | d5996b25... | b***@example.com | 2dcfeb08... | varejo |
-| c004 | Daniel Rocha | ***.***.***-44 | 34ce32f4... | d***@example.com | 1762b4d0... | alta_renda |
-| c005 | Elena Martins | ***.***.***-55 | a96fb099... | e***@example.com | f309168b... | varejo |
-| c011 | Roberto Costa | ***.***.***-21 | 6de27dc7... | r***@example.com | 7afcb3d3... | varejo |
+| cliente_id | nome | cpf_masked | segmento | total_contas | volume_transacoes | ultima_transacao | score_risco |
+|---|---|---|---|---|---|---|---|
+| c001 | Ana Silva | ***.***.***-11 | alta_renda | 1 | ~15.3M | 2026-06-20T02:25 | 0.999 |
+| c002 | Bruno Souza | ***.***.***-22 | varejo | 1 | ~15.1M | 2026-06-20T02:25 | 1.0 |
+| c004 | Daniel Rocha | ***.***.***-44 | alta_renda | 1 | ~15.2M | 2026-06-20T02:25 | 0.999 |
+| c005 | Elena Martins | ***.***.***-55 | varejo | - | - | - | 1.0 |
+| c011 | Roberto Costa | ***.***.***-21 | varejo | - | - | - | - |
+
+Clientes sem dados nos dominios de contas/transacoes/riscos ficam com NULL (left join).
 
 ### Screenshot
 
@@ -266,7 +271,7 @@ aws glue get-job-runs --job-name lfmesh-dev-riscos-streaming-to-bronze --max-ite
 
 | # | Teste | Status |
 |---|-------|--------|
-| 1 | Pipeline clientes — mascaramento PII na gold | ✅ |
+| 1 | Pipeline clientes — visao 360 real + mascaramento PII | ✅ |
 | 2 | Governanca — BI sem nome/hashes (clientes) | ✅ |
 | 3 | Governanca — BI sem saldo (contas) | ✅ |
 | 4 | Governanca — acesso negado a bronze | ✅ |
