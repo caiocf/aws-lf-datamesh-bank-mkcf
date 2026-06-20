@@ -282,10 +282,10 @@ data "aws_iam_policy_document" "glue_job_silver_access" {
     ]
   }
 
-  # Escrita no silver
+  # Escrita no silver (PySpark overwrite precisa de DeleteObject)
   statement {
     sid     = "WriteSilverBucket"
-    actions = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
+    actions = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"]
     resources = [
       "arn:aws:s3:::${var.project_name}-${var.environment}-clientes-silver-${data.aws_caller_identity.current.account_id}",
       "arn:aws:s3:::${var.project_name}-${var.environment}-clientes-silver-${data.aws_caller_identity.current.account_id}/*"
@@ -317,28 +317,33 @@ resource "aws_iam_role_policy_attachment" "glue_job_silver_access" {
   policy_arn = aws_iam_policy.glue_job_silver_access.arn
 }
 
-# Glue Job: Bronze → Silver
+# Glue Job: Bronze → Silver (PySpark + SHA256 hash com salt)
 resource "aws_glue_job" "bronze_to_silver" {
-  name     = local.silver_job_name
-  role_arn = aws_iam_role.glue_job.arn
+  name         = local.silver_job_name
+  role_arn     = aws_iam_role.glue_job.arn
+  glue_version = "4.0"
 
   command {
-    name            = "pythonshell"
-    python_version  = "3.9"
+    name            = "glueetl"
     script_location = "s3://${aws_s3_bucket.landing.id}/${local.scripts_prefix}/bronze_to_silver.py"
+    python_version  = "3"
   }
 
   default_arguments = {
-    "--source_bucket"             = "${var.project_name}-${var.environment}-clientes-bronze-${data.aws_caller_identity.current.account_id}"
-    "--source_prefix"             = "clientes_raw/"
-    "--target_bucket"             = "${var.project_name}-${var.environment}-clientes-silver-${data.aws_caller_identity.current.account_id}"
-    "--target_prefix"             = "clientes"
-    "--additional-python-modules" = "pyarrow==14.0.1,pandas==2.1.4"
+    "--JOB_NAME"              = local.silver_job_name
+    "--source_bucket"         = "${var.project_name}-${var.environment}-clientes-bronze-${data.aws_caller_identity.current.account_id}"
+    "--source_prefix"         = "clientes_raw"
+    "--target_bucket"         = "${var.project_name}-${var.environment}-clientes-silver-${data.aws_caller_identity.current.account_id}"
+    "--target_prefix"         = "clientes"
+    "--enable-metrics"        = "true"
+    "--enable-spark-ui"       = "true"
+    "--spark-event-logs-path" = "s3://${aws_s3_bucket.landing.id}/spark-logs/"
   }
 
-  max_capacity = 0.0625
-  max_retries  = 0
-  timeout      = 5
+  number_of_workers = 2
+  worker_type       = "G.1X"
+  max_retries       = 0
+  timeout           = 10
 
   tags = {
     Domain = "clientes"
@@ -443,10 +448,10 @@ data "aws_iam_policy_document" "glue_job_gold_access" {
     ]
   }
 
-  # Escrita no gold
+  # Escrita no gold (PySpark overwrite precisa de DeleteObject)
   statement {
     sid     = "WriteGoldBucket"
-    actions = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
+    actions = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"]
     resources = [
       "arn:aws:s3:::${var.project_name}-${var.environment}-clientes-gold-${data.aws_caller_identity.current.account_id}",
       "arn:aws:s3:::${var.project_name}-${var.environment}-clientes-gold-${data.aws_caller_identity.current.account_id}/*"
@@ -478,28 +483,33 @@ resource "aws_iam_role_policy_attachment" "glue_job_gold_access" {
   policy_arn = aws_iam_policy.glue_job_gold_access.arn
 }
 
-# Glue Job: Silver → Gold
+# Glue Job: Silver → Gold (PySpark + mascaramento PII com salt)
 resource "aws_glue_job" "silver_to_gold" {
-  name     = local.gold_job_name
-  role_arn = aws_iam_role.glue_job.arn
+  name         = local.gold_job_name
+  role_arn     = aws_iam_role.glue_job.arn
+  glue_version = "4.0"
 
   command {
-    name            = "pythonshell"
-    python_version  = "3.9"
+    name            = "glueetl"
     script_location = "s3://${aws_s3_bucket.landing.id}/${local.scripts_prefix}/silver_to_gold.py"
+    python_version  = "3"
   }
 
   default_arguments = {
-    "--source_bucket"             = "${var.project_name}-${var.environment}-clientes-silver-${data.aws_caller_identity.current.account_id}"
-    "--source_prefix"             = "clientes/"
-    "--target_bucket"             = "${var.project_name}-${var.environment}-clientes-gold-${data.aws_caller_identity.current.account_id}"
-    "--target_prefix"             = "cliente_360"
-    "--additional-python-modules" = "pyarrow==14.0.1,pandas==2.1.4"
+    "--JOB_NAME"              = local.gold_job_name
+    "--source_bucket"         = "${var.project_name}-${var.environment}-clientes-silver-${data.aws_caller_identity.current.account_id}"
+    "--source_prefix"         = "clientes"
+    "--target_bucket"         = "${var.project_name}-${var.environment}-clientes-gold-${data.aws_caller_identity.current.account_id}"
+    "--target_prefix"         = "cliente_360"
+    "--enable-metrics"        = "true"
+    "--enable-spark-ui"       = "true"
+    "--spark-event-logs-path" = "s3://${aws_s3_bucket.landing.id}/spark-logs/"
   }
 
-  max_capacity = 0.0625
-  max_retries  = 0
-  timeout      = 5
+  number_of_workers = 2
+  worker_type       = "G.1X"
+  max_retries       = 0
+  timeout           = 10
 
   tags = {
     Domain = "clientes"

@@ -5,7 +5,8 @@ environment  = "dev"
 # Recomendado: substitua pela ARN real do role ou user que executa Terraform.
 # Exemplo:
 # lakeformation_admin_arns = [
-#   "arn:aws:iam::NUMERO_CONTA:role/Admin"
+#   "arn:aws:iam::NUMERO_CONTA:role/Admin",
+#   "arn:aws:iam::NUMERO_CONTA:user/meu_user"
 # ]
 lakeformation_admin_arns = []
 

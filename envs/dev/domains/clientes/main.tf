@@ -90,7 +90,9 @@ module "domain" {
             { name = "nome", type = "string", comment = "PII" },
             { name = "cpf", type = "string", comment = "PII" },
             { name = "email", type = "string", comment = "PII" },
-            { name = "segmento", type = "string" }
+            { name = "segmento", type = "string" },
+            { name = "cpf_hash", type = "string", comment = "SHA256 do CPF" },
+            { name = "email_hash", type = "string", comment = "SHA256 do email" }
           ]
           partition_keys = [
             { name = "pais", type = "string" }
@@ -112,16 +114,18 @@ module "domain" {
     gold = {
       tables = {
         cliente_360 = {
-          description    = "Visao 360 analitica de clientes - enriquecida com dados de outros dominios."
+          description    = "Visao 360 analitica de clientes - enriquecida com dados de outros dominios. PII mascarada via SHA256 + partial mask."
           format         = "parquet"
           classification = "confidential"
           pii            = "yes"
           data_product   = "cliente_360"
           columns = [
             { name = "cliente_id", type = "string" },
-            { name = "nome", type = "string", comment = "PII" },
-            { name = "cpf", type = "string", comment = "PII" },
-            { name = "email", type = "string", comment = "PII" },
+            { name = "nome", type = "string", comment = "PII - nome completo" },
+            { name = "cpf_masked", type = "string", comment = "CPF parcialmente mascarado (***.***.***-XX)" },
+            { name = "cpf_hash", type = "string", comment = "SHA256 do CPF para joins tecnicos" },
+            { name = "email_masked", type = "string", comment = "Email parcialmente mascarado (x***@dominio)" },
+            { name = "email_hash", type = "string", comment = "SHA256 do email para joins tecnicos" },
             { name = "segmento", type = "string" },
             { name = "total_contas", type = "int", comment = "Qtd contas ativas - dominio contas" },
             { name = "volume_transacoes", type = "double", comment = "Soma valor transacoes - dominio transacoes" },
@@ -154,21 +158,21 @@ module "domain" {
           filter_name           = "bi_cliente_360_no_pii_br"
           table_name            = "cliente_360"
           principal_arn         = data.aws_iam_role.consumer["bi"].arn
-          excluded_column_names = ["nome", "cpf", "email"]
+          excluded_column_names = ["nome", "cpf_hash", "email_hash"]
           row_filter_expression = "pais = 'BR'"
         }
         ds_cliente_360 = {
-          filter_name           = "ds_cliente_360_no_direct_pii"
+          filter_name           = "ds_cliente_360_masked"
           table_name            = "cliente_360"
           principal_arn         = data.aws_iam_role.consumer["data_science"].arn
-          excluded_column_names = ["cpf", "email"]
+          excluded_column_names = ["nome"]
           row_filter_expression = "pais = 'BR'"
         }
         risco_cliente_360 = {
-          filter_name           = "risco_cliente_360_no_email"
+          filter_name           = "risco_cliente_360_ops"
           table_name            = "cliente_360"
           principal_arn         = data.aws_iam_role.consumer["risco_fraude"].arn
-          excluded_column_names = ["email"]
+          excluded_column_names = []
           row_filter_expression = "pais = 'BR'"
         }
       }

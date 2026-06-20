@@ -22,7 +22,7 @@ Os dominios `contas`, `transacoes` e `riscos` compartilham uma baseline de rede 
 
 | Dominio | Fonte principal | Modo de ingestao | Servicos principais | Data product gold |
 | --- | --- | --- | --- | --- |
-| `clientes` | CSV local | Batch diario | S3 landing, EventBridge, Lambda, Glue Python Shell, Glue Workflow | `dev_gold_clientes.cliente_360` |
+| `clientes` | CSV local | Batch diario | S3 landing, EventBridge, Lambda, Glue Python Shell (ingestao), Glue ETL PySpark (transformacao), Glue Workflow | `dev_gold_clientes.cliente_360` |
 | `parceiros` | API mock JSON | Batch diario | API Gateway, EventBridge, Lambda, Glue Workflow | `dev_gold_parceiros.parceiros_ativos` |
 | `contas` | PostgreSQL | CDC continuo + curadoria horaria | RDS, DMS, Lambda seed, Glue Workflow | `dev_gold_contas.contas_ativas` |
 | `transacoes` | Eventos Kafka | Streaming + curadoria horaria | MSK Provisioned, Lambda, MSK Connect, Glue Workflow | `dev_gold_transacoes.transacoes_curated` |
@@ -86,11 +86,72 @@ O projeto usa Lake Formation como plano central de autorizacao:
 - controles finos por linha e coluna sao aplicados com `Data Cells Filters`
 - buckets S3 usam `public access block` e criptografia server-side
 
-Exemplos de governanca implementada:
+### Mascaramento de dados (PII)
+
+O dominio `clientes` implementa mascaramento de PII como padrao de referencia:
+
+- **Bronze**: dado bruto preservado (copia fiel da fonte)
+- **Silver**: campos originais mantidos + colunas `cpf_hash` e `email_hash` (SHA256 com salt irreversivel) para joins tecnicos
+- **Gold**: campos `cpf` e `email` substituidos por versoes mascaradas (`***.***.***-XX`, `x***@dominio`) e hashes. O dado original nao existe na camada exposta
+
+Resultado: nenhuma persona consumidora ve CPF ou email em texto claro, mesmo com acesso direto ao S3. Data Science pode fazer joins cross-dominio via hash. Detalhes em [docs/MASCARAMENTO.md](docs/MASCARAMENTO.md).
+
+### Exemplos de governanca implementada
 
 - `auditoria` recebe acesso completo aos data products gold definidos para a persona
-- `bi` recebe filtros por pais e remocao de colunas sensiveis em varios dominios
-- `risco-fraude` recebe acesso ampliado ao dominio `riscos`
+- `bi` recebe filtros por pais e remocao de colunas sensiveis (hashes e nome) em varios dominios
+- `data-science` recebe acesso a hashes para joins, sem ver nome
+- `risco-fraude` recebe acesso ampliado ao dominio `riscos` e todas as colunas mascaradas de `clientes`
+
+### Roles consumidoras e permissoes por dominio
+
+A `foundation` cria 5 roles consumidoras que simulam personas de contas consumidoras:
+
+| Role | Descricao | Capacidades base |
+|------|-----------|------------------|
+| `lfmesh-dev-consumer-bi` | Analistas BI | Athena, Glue Catalog (leitura), LF GetDataAccess |
+| `lfmesh-dev-consumer-data-science` | Cientistas de dados | Idem + hashes para joins cross-dominio |
+| `lfmesh-dev-consumer-data-warehouse` | Data Warehouse (Redshift Spectrum conceitual) | Idem |
+| `lfmesh-dev-consumer-risco-fraude` | Time de risco e fraude | Idem + acesso ampliado a riscos |
+| `lfmesh-dev-consumer-auditoria` | Auditoria e compliance | Full SELECT nos data products gold |
+
+Matriz de acesso nos data products gold:
+
+| Dominio / Persona | `bi` | `data-science` | `data-warehouse` | `risco-fraude` | `auditoria` |
+|---|:---:|:---:|:---:|:---:|:---:|
+| `cliente_360` | filtrado (sem nome, hashes) | filtrado (sem nome) | DESCRIBE apenas | filtrado (todas colunas) | full |
+| `parceiros_ativos` | filtrado (BR) | filtrado (BR) | DESCRIBE apenas | DESCRIBE apenas | full |
+| `contas_ativas` | filtrado (sem saldo, BR) | filtrado (BR) | DESCRIBE apenas | DESCRIBE apenas | full |
+| `transacoes_curated` | filtrado (BR) | filtrado (BR) | DESCRIBE apenas | filtrado (BR) | full |
+| `alertas_fraude` | filtrado (sem score_risco, BR) | DESCRIBE apenas | DESCRIBE apenas | filtrado (BR) | full |
+
+Todas as roles usam workgroups Athena dedicados (`lfmesh-dev-<persona>`) com resultados isolados no bucket `lfmesh-dev-athena-results`.
+
+### Usuarios e aplicacoes simulados (`consumer-roles`)
+
+O modulo `consumer-roles` cria principals mais realistas para simular o assume-role entre contas:
+
+Usuarios simulados:
+
+| Role | Persona | Departamento |
+|------|---------|-------------|
+| `lfmesh-dev-user-ana-silva-bi` | Analista BI | business-intelligence |
+| `lfmesh-dev-user-carlos-santos-ds` | Cientista de Dados | data-science |
+| `lfmesh-dev-user-maria-costa-dw` | Engenheira DW | data-warehouse |
+| `lfmesh-dev-user-pedro-oliveira-risk` | Analista de Risco | risk-management |
+| `lfmesh-dev-user-lucia-ferreira-audit` | Auditora | audit-compliance |
+
+Aplicacoes simuladas:
+
+| Role | Descricao | Padrao de acesso |
+|------|-----------|------------------|
+| `lfmesh-dev-app-quicksight-prod` | Dashboards QuickSight | Interactive |
+| `lfmesh-dev-app-sagemaker-ml` | Pipeline ML SageMaker | Batch training |
+| `lfmesh-dev-app-redshift-dwh` | Data Warehouse Redshift | Scheduled ETL |
+| `lfmesh-dev-app-fraud-detection-api` | API deteccao de fraude | Real-time scoring |
+| `lfmesh-dev-app-compliance-reporter` | Relatorios compliance | Monthly reports |
+
+Todos usam `sts:AssumeRole` com `ExternalId` para simular o cross-account trust de forma segura dentro da mesma conta.
 
 ## Pre-requisitos
 
@@ -238,7 +299,9 @@ Se voce estiver fazendo limpeza completa do ambiente, destrua a camada `network`
 ├── docs
 │   ├── CUSTOS.md
 │   ├── DEPLOY.md
-│   └── MODELO-MULTI-ACCOUNT-REAL.md
+│   ├── MASCARAMENTO.md
+│   ├── MODELO-MULTI-ACCOUNT-REAL.md
+│   └── PLANO-INGESTAO.md
 ├── modules
 │   ├── consumer-roles
 │   ├── foundation

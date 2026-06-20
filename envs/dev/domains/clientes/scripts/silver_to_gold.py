@@ -1,82 +1,56 @@
 import sys
-import boto3
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-from io import BytesIO
+from awsglue.context import GlueContext
+from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from pyspark.sql import functions as F
 
-args = getResolvedOptions(sys.argv, ['source_bucket', 'source_prefix', 'target_bucket', 'target_prefix'])
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'source_bucket', 'source_prefix', 'target_bucket', 'target_prefix'])
 
-s3 = boto3.client('s3')
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Lista todos os Parquets no silver
-paginator = s3.get_paginator('list_objects_v2')
-pages = paginator.paginate(Bucket=args['source_bucket'], Prefix=args['source_prefix'])
+SALT = "lfmesh-clientes-2026"
 
-frames = []
-for page in pages:
-    for obj in page.get('Contents', []):
-        key = obj['Key']
-        if not key.endswith('.parquet'):
-            continue
+source_path = f"s3://{args['source_bucket']}/{args['source_prefix']}/"
+target_path = f"s3://{args['target_bucket']}/{args['target_prefix']}/"
 
-        # Extrai pais do path
-        parts = key.split('/')
-        pais_val = None
-        for part in parts:
-            if part.startswith('pais='):
-                pais_val = part.split('=')[1]
+# Lê silver (particionado por pais)
+df = spark.read.option("basePath", source_path).parquet(source_path)
+print(f"Silver: {df.count()} registros")
 
-        response = s3.get_object(Bucket=args['source_bucket'], Key=key)
-        df = pd.read_parquet(BytesIO(response['Body'].read()))
-        df['pais'] = pais_val
-        frames.append(df)
+# Enriquecimento: colunas de outros domínios (NULL por agora)
+df = (
+    df.withColumn("total_contas", F.lit(None).cast("int"))
+      .withColumn("volume_transacoes", F.lit(None).cast("double"))
+      .withColumn("ultima_transacao", F.lit(None).cast("string"))
+      .withColumn("score_risco", F.lit(None).cast("string"))
+)
 
-if not frames:
-    print("Nenhum dado encontrado no silver")
-    sys.exit(0)
+# Mascaramento PII: hash com salt + partial mask + drop originais
+df_gold = (
+    df.withColumn("cpf_hash", F.sha2(F.concat(F.col("cpf"), F.lit(SALT)), 256))
+      .withColumn("email_hash", F.sha2(F.concat(F.col("email"), F.lit(SALT)), 256))
+      .withColumn("cpf_masked", F.regexp_replace(F.col("cpf"), r"(\d{3})(\d{3})(\d{3})(\d{2})", r"***.***.***-$4"))
+      .withColumn("email_masked", F.regexp_replace(F.col("email"), r"(^.).*(@.*$)", r"$1***$2"))
+      .drop("cpf", "email")
+)
 
-df_all = pd.concat(frames, ignore_index=True)
-print(f"Silver: {len(df_all)} registros lidos")
+# Reordena colunas para schema do Glue Catalog
+df_gold = df_gold.select(
+    "cliente_id", "nome", "cpf_masked", "cpf_hash",
+    "email_masked", "email_hash", "segmento",
+    "total_contas", "volume_transacoes", "ultima_transacao", "score_risco",
+    "pais"
+)
 
-# Enriquecimento: adiciona colunas de outros domínios (NULL por agora)
-# Futuro: joins com dev_silver_contas, dev_silver_transacoes, dev_gold_riscos
-df_all['total_contas'] = None
-df_all['volume_transacoes'] = None
-df_all['ultima_transacao'] = None
-df_all['score_risco'] = None
+print(f"Gold: {df_gold.count()} registros mascarados")
 
-print(f"Gold: {len(df_all)} registros enriquecidos (colunas extras: NULL até domínios disponíveis)")
+# Grava particionado por pais (overwrite)
+df_gold.write.mode("overwrite").partitionBy("pais").parquet(target_path)
+print("Transformação silver → gold concluída (PII mascarada com salt)")
 
-# Grava particionado por pais no gold
-for pais_val, pais_df in df_all.groupby('pais'):
-    data_df = pais_df.drop(columns=['pais'])
-
-    # Define schema explícito para manter tipos corretos
-    schema = pa.schema([
-        ('cliente_id', pa.string()),
-        ('nome', pa.string()),
-        ('cpf', pa.string()),
-        ('email', pa.string()),
-        ('segmento', pa.string()),
-        ('total_contas', pa.int32()),
-        ('volume_transacoes', pa.float64()),
-        ('ultima_transacao', pa.string()),
-        ('score_risco', pa.string()),
-    ])
-
-    table = pa.Table.from_pandas(data_df, schema=schema, preserve_index=False)
-    buffer = BytesIO()
-    pq.write_table(table, buffer)
-
-    target_key = f"{args['target_prefix']}/pais={pais_val}/data.parquet"
-    s3.put_object(
-        Bucket=args['target_bucket'],
-        Key=target_key,
-        Body=buffer.getvalue(),
-        ContentType='application/octet-stream'
-    )
-    print(f"Gold partição pais={pais_val}: {len(data_df)} registros")
-
-print("Transformação silver → gold concluída")
+job.commit()

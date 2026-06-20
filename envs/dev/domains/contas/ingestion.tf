@@ -12,8 +12,8 @@ locals {
   bronze_bucket         = "${var.project_name}-${var.environment}-contas-bronze-${local.account_id}"
   silver_bucket         = "${var.project_name}-${var.environment}-contas-silver-${local.account_id}"
   gold_bucket           = "${var.project_name}-${var.environment}-contas-gold-${local.account_id}"
-  db_name               = "contasdb"
-  db_username           = "admin_contas"
+  db_name               = var.rds_db_name
+  db_username           = var.rds_db_username
   log_retention_in_days = var.log_retention_in_days
 }
 
@@ -109,10 +109,27 @@ resource "aws_db_parameter_group" "contas" {
     apply_method = "pending-reboot"
   }
 
+  # Evita que o DMS desconecte por inatividade durante periodos sem CDC.
   parameter {
     name         = "wal_sender_timeout"
     value        = "0"
     apply_method = "pending-reboot"
+  }
+
+  # Limita WAL retido por replication slot para evitar storage-full.
+  # Se DMS ficar offline e acumular >10GB de WAL, o slot e invalidado
+  # e o DMS refaz full-load (instantaneo para 10 rows).
+  parameter {
+    name         = "max_slot_wal_keep_size"
+    value        = "10240"
+    apply_method = "immediate"
+  }
+
+  # Checkpoint a cada 5 min (default). Explicito para documentacao.
+  parameter {
+    name         = "checkpoint_timeout"
+    value        = "300"
+    apply_method = "immediate"
   }
 
   tags = { Domain = "contas", Layer = "ingestion" }
@@ -120,12 +137,13 @@ resource "aws_db_parameter_group" "contas" {
 
 resource "aws_db_instance" "contas" {
   identifier     = "${local.name_prefix}-db"
-  engine         = "postgres"
-  engine_version = "16.9"
-  instance_class = "db.t3.micro"
+  engine         = var.rds_engine
+  engine_version = var.rds_engine_version
+  instance_class = var.rds_instance_class
 
-  allocated_storage = 20
-  storage_type      = "gp3"
+  allocated_storage     = var.rds_allocated_storage
+  max_allocated_storage = var.rds_max_allocated_storage
+  storage_type          = var.rds_storage_type
 
   db_name  = local.db_name
   username = local.db_username

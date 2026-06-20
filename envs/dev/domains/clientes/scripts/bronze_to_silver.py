@@ -1,74 +1,51 @@
 import sys
-import boto3
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-from io import BytesIO
+from awsglue.context import GlueContext
+from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from pyspark.sql import functions as F
 
-args = getResolvedOptions(sys.argv, ['source_bucket', 'source_prefix', 'target_bucket', 'target_prefix'])
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'source_bucket', 'source_prefix', 'target_bucket', 'target_prefix'])
 
-s3 = boto3.client('s3')
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Lista todos os Parquets no bronze (todas as partições)
-paginator = s3.get_paginator('list_objects_v2')
-pages = paginator.paginate(Bucket=args['source_bucket'], Prefix=args['source_prefix'])
+SALT = "lfmesh-clientes-2026"
 
-frames = []
-for page in pages:
-    for obj in page.get('Contents', []):
-        key = obj['Key']
-        if not key.endswith('.parquet'):
-            continue
+source_path = f"s3://{args['source_bucket']}/{args['source_prefix']}/"
+target_path = f"s3://{args['target_bucket']}/{args['target_prefix']}/"
 
-        # Extrai pais e dt_ingest do path Hive-style
-        parts = key.split('/')
-        pais_val = None
-        dt_val = None
-        for part in parts:
-            if part.startswith('pais='):
-                pais_val = part.split('=')[1]
-            elif part.startswith('dt_ingest='):
-                dt_val = part.split('=')[1]
+# Lê todos os Parquets do bronze (particionado por pais/dt_ingest)
+df = spark.read.option("basePath", source_path).parquet(source_path)
+total = df.count()
+print(f"Bronze: {total} registros")
 
-        # Lê Parquet
-        response = s3.get_object(Bucket=args['source_bucket'], Key=key)
-        df = pd.read_parquet(BytesIO(response['Body'].read()))
-        df['pais'] = pais_val
-        df['dt_ingest'] = dt_val
-        frames.append(df)
-
-if not frames:
-    print("Nenhum dado encontrado no bronze")
-    sys.exit(0)
-
-# Concatena tudo
-df_all = pd.concat(frames, ignore_index=True)
-print(f"Bronze: {len(df_all)} registros lidos")
-
-# Deduplica: última dt_ingest vence por cliente_id
-df_dedup = (
-    df_all.sort_values('dt_ingest', ascending=False)
-          .drop_duplicates(subset=['cliente_id'], keep='first')
-          .drop(columns=['dt_ingest'])
-)
-print(f"Silver: {len(df_dedup)} registros após deduplicação")
-
-# Grava particionado por pais no silver
-for pais_val, pais_df in df_dedup.groupby('pais'):
-    data_df = pais_df.drop(columns=['pais'])
-
-    table = pa.Table.from_pandas(data_df, preserve_index=False)
-    buffer = BytesIO()
-    pq.write_table(table, buffer)
-
-    target_key = f"{args['target_prefix']}/pais={pais_val}/data.parquet"
-    s3.put_object(
-        Bucket=args['target_bucket'],
-        Key=target_key,
-        Body=buffer.getvalue(),
-        ContentType='application/octet-stream'
+if total == 0:
+    print("Nenhum dado no bronze. Finalizando.")
+else:
+    # Deduplica: última dt_ingest vence por cliente_id
+    from pyspark.sql.window import Window
+    window = Window.partitionBy("cliente_id").orderBy(F.col("dt_ingest").desc())
+    df_dedup = (
+        df.withColumn("rn", F.row_number().over(window))
+          .filter(F.col("rn") == 1)
+          .drop("rn", "dt_ingest")
     )
-    print(f"Silver partição pais={pais_val}: {len(data_df)} registros")
 
-print("Transformação bronze → silver concluída")
+    # Mascaramento: gera hashes irreversíveis com salt para joins técnicos
+    df_silver = (
+        df_dedup
+        .withColumn("cpf_hash", F.sha2(F.concat(F.col("cpf"), F.lit(SALT)), 256))
+        .withColumn("email_hash", F.sha2(F.concat(F.col("email"), F.lit(SALT)), 256))
+    )
+
+    print(f"Silver: {df_silver.count()} registros após deduplicação (com cpf_hash, email_hash)")
+
+    # Grava particionado por pais (overwrite)
+    df_silver.write.mode("overwrite").partitionBy("pais").parquet(target_path)
+    print("Transformação bronze → silver concluída")
+
+job.commit()
