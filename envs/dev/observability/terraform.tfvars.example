@@ -1,0 +1,16 @@
+# Observabilidade — configuração do lab
+#
+# Copie este arquivo para terraform.tfvars e ajuste:
+#   cp terraform.tfvars.example terraform.tfvars
+
+project_name = "lfmesh"
+environment  = "dev"
+aws_region   = "us-east-1"
+
+# Email para notificações (precisa confirmar subscription no SNS após apply)
+# Deixe vazio para não criar subscription.
+notification_email = ""
+
+# OAM Sink: habilitar apenas em cenário multi-account real.
+# No lab single-account, deixar false.
+enable_oam_sink = false

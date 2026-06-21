@@ -480,7 +480,7 @@ resource "aws_glue_job" "streaming_to_bronze" {
   number_of_workers = 2
   worker_type       = "G.1X"
   max_retries       = 0
-  timeout           = 60
+  timeout           = 0
 
   tags = { Domain = "riscos", Layer = "ingestion" }
 

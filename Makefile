@@ -15,6 +15,7 @@ endif
 .PHONY: init-consumer-roles plan-consumer-roles apply-consumer-roles destroy-consumer-roles
 .PHONY: init-foundation plan-foundation apply-foundation destroy-foundation
 .PHONY: init-network plan-network apply-network destroy-network
+.PHONY: init-observability plan-observability apply-observability destroy-observability
 .PHONY: init-domain plan-domain apply-domain destroy-domain
 
 cleanup:
@@ -79,6 +80,18 @@ apply-network:
 
 destroy-network:
 	cd envs/$(ENV)/network && terraform destroy
+
+init-observability:
+	cd envs/$(ENV)/observability && terraform init
+
+plan-observability:
+	cd envs/$(ENV)/observability && terraform plan
+
+apply-observability:
+	cd envs/$(ENV)/observability && terraform apply
+
+destroy-observability:
+	cd envs/$(ENV)/observability && terraform destroy
 
 init-domain:
 	cd envs/$(ENV)/domains/$(DOMAIN) && terraform init

@@ -76,6 +76,25 @@ Estado compartilhado de rede do ambiente:
 - cria `VPC Endpoints` compartilhados para `S3`, `Secrets Manager` e `Glue`
 - publica outputs consumidos por `contas`, `transacoes` e `riscos` via `terraform_remote_state`
 
+### `modules/observability-domain`
+
+Modulo instanciado por cada conta produtora (dominio). Cria:
+
+- CloudWatch Alarms locais (Glue Job failed/duration, Lambda errors/throttles, DMS latency, MSK lag, MSK Connect status, Glue Streaming stopped, data freshness)
+- OAM Link condicional para compartilhar metricas com conta central (multi-account real)
+
+### `modules/observability-central`
+
+Modulo instanciado na conta de observabilidade. Cria:
+
+- SNS Topics (critical, warning, data-quality)
+- CloudWatch Dashboard consolidado com widgets por dominio
+- OAM Sink condicional para receber metricas cross-account
+
+### `envs/dev/observability`
+
+Instancia ambos os modulos no lab single-account. Simula a separacao de responsabilidades entre conta central e contas produtoras.
+
 ## Governanca e seguranca
 
 O projeto usa Lake Formation como plano central de autorizacao:
@@ -94,7 +113,7 @@ O dominio `clientes` implementa mascaramento de PII como padrao de referencia:
 - **Silver**: campos originais mantidos + colunas `cpf_hash` e `email_hash` (SHA256 com salt irreversivel) para joins tecnicos
 - **Gold**: campos `cpf` e `email` substituidos por versoes mascaradas (`***.***.***-XX`, `x***@dominio`) e hashes. O dado original nao existe na camada exposta
 
-Resultado: nenhuma persona consumidora ve CPF ou email em texto claro, mesmo com acesso direto ao S3. O campo `nome` permanece em claro na gold por decisao de design (necessario para risco-fraude e auditoria), mas e controlado por Data Cells Filter — `bi` e `data-science` nao o veem. Data Science pode fazer joins cross-dominio via hash. Detalhes em [docs/MASCARAMENTO.md](docs/MASCARAMENTO.md).
+Resultado: nenhuma persona consumidora ve CPF ou email em texto claro, mesmo com acesso direto ao S3. O campo `nome` permanece em claro na gold por decisao de design (necessario para risco-fraude e auditoria), mas e controlado por Data Cells Filter — `bi` e `data-science` nao o veem. Data Science pode fazer joins cross-dominio via hash.
 
 ### Exemplos de governanca implementada
 
@@ -215,6 +234,17 @@ Ordem alinhada com o estado atual do repositorio:
 4. `transacoes`
 5. `riscos`
 
+### 5. Observabilidade
+
+```bash
+cd ../observability
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+Cria alarmes, SNS topics e dashboard CloudWatch consolidado. Deve ser aplicada apos os dominios para que as metricas referenciadas existam. Detalhes em [docs/OBSERVABILIDADE.md](docs/OBSERVABILIDADE.md).
+
 Exemplo:
 
 ```bash
@@ -279,6 +309,8 @@ cleanup.bat
 make cleanup
 ```
 
+> **Observacao sobre tempo de execucao:** O script de limpeza pode demorar bastante (30-60 minutos) devido a exclusao de recursos como RDS, MSK e buckets S3 com muitos arquivos. Se a etapa de exclusao de buckets S3 estiver demorando, voce pode acessar o console AWS (S3 > selecionar bucket > Empty > Delete) para esvaziar manualmente enquanto o script roda — isso acelera o processo. O script e idempotente: se cancelar e rodar novamente, ele continua de onde parou sem problemas.
+
 Para destruir apenas um dominio:
 
 ```bash
@@ -299,19 +331,28 @@ Se voce estiver fazendo limpeza completa do ambiente, destrua a camada `network`
 ├── docs
 │   ├── CUSTOS.md
 │   ├── DEPLOY.md
-│   ├── MASCARAMENTO.md
+│   ├── EVIDENCIAS-OBSERVABILIDADE.md
 │   ├── MODELO-MULTI-ACCOUNT-REAL.md
-│   ├── PLANO-INGESTAO.md
-│   └── VALIDACAO-END-TO-END.md
+│   ├── OBSERVABILIDADE.md
+│   ├── VALIDACAO-END-TO-END.md
+│   └── evidencias
+│       └── observabilidade
+│           ├── 00_dashboard_completo.png
+│           ├── 01_glue_duracao.png
+│           ├── ... (snapshots dos paineis)
+│           └── 11_data_volume.png
 ├── modules
 │   ├── consumer-roles
+│   ├── domain
 │   ├── foundation
-│   └── domain
+│   ├── observability-central
+│   └── observability-domain
 └── envs
     └── dev
         ├── consumer-roles
         ├── foundation
         ├── network
+        ├── observability
         └── domains
             ├── clientes
             ├── parceiros

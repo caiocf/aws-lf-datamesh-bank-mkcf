@@ -155,7 +155,22 @@ Observacao:
 - a Lambda `lfmesh-dev-riscos-start-streaming-job` roda a cada 15 minutos como watchdog
 - o job `lfmesh-dev-riscos-streaming-to-bronze` e iniciado automaticamente no deploy
 
-## 6. Validacao no Athena
+## 6. Observabilidade
+
+```powershell
+Set-Location ../../observability
+Copy-Item terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+Observacao:
+
+- deve ser aplicada **apos** todos os dominios para que as metricas referenciadas existam
+- cria 43 alarmes CloudWatch, SNS topics, dashboard consolidado e EventBridge rules para captura de falhas
+- detalhes em [OBSERVABILIDADE.md](OBSERVABILIDADE.md)
+
+## 7. Validacao no Athena
 
 Use primeiro seu perfil admin do Lake Formation e o workgroup retornado pela foundation.
 
@@ -163,7 +178,7 @@ Para tabelas com `partition projection` usando `pais = injected`, prefira consul
 
 Se alguma tabela ainda vier vazia logo apos o deploy, espere os jobs Glue terminarem antes de repetir o `SELECT`.
 
-### 6.1 Validacao rapida das gold tables
+### 7.1 Validacao rapida das gold tables
 
 ```sql
 SELECT * FROM dev_gold_clientes.cliente_360 WHERE pais = 'BR' LIMIT 10;
@@ -173,7 +188,7 @@ SELECT * FROM dev_gold_transacoes.transacoes_curated WHERE pais = 'BR' LIMIT 10;
 SELECT * FROM dev_gold_riscos.alertas_fraude WHERE pais = 'BR' LIMIT 10;
 ```
 
-### 6.2 Validacao especifica do dominio riscos
+### 7.2 Validacao especifica do dominio riscos
 
 ```sql
 SELECT count(*) FROM dev_bronze_riscos.riscos_raw WHERE pais = 'BR';
@@ -181,7 +196,7 @@ SELECT count(*) FROM dev_silver_riscos.riscos WHERE pais = 'BR';
 SELECT count(*) FROM dev_gold_riscos.alertas_fraude WHERE pais = 'BR';
 ```
 
-## 7. Validacao de governanca
+## 8. Validacao de governanca
 
 Depois da validacao admin, assuma as roles consumidoras da foundation pela console ou CLI e teste os workgroups correspondentes.
 
@@ -193,7 +208,7 @@ Resultado esperado no dominio `riscos`:
 - `data-science` e `data-warehouse`: nao consomem o data product `riscos` hoje
 - consumidores nao enxergam `bronze` nem `silver`
 
-## 8. Destruicao
+## 9. Destruicao
 
 Antes de destruir `riscos`, vale pausar os agendamentos e parar o streaming ativo:
 
@@ -207,7 +222,10 @@ aws glue batch-stop-job-run --job-name lfmesh-dev-riscos-streaming-to-bronze --j
 Depois destrua em ordem reversa:
 
 ```powershell
-Set-Location envs/dev/domains/riscos
+Set-Location envs/dev/observability
+terraform destroy
+
+Set-Location ../domains/riscos
 terraform destroy
 
 Set-Location ../transacoes

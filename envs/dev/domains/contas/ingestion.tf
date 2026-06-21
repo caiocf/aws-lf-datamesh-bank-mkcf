@@ -369,6 +369,24 @@ resource "aws_dms_replication_task" "contas_cdc" {
     Logging = {
       EnableLogging = true
     }
+    # Heartbeat evita que o replication slot seja invalidado por inatividade.
+    # Grava heartbeat a cada 5 min no schema awsdms_heartbeat, mantendo
+    # o slot ativo e o WAL position avancando mesmo sem changes na tabela fonte.
+    HeartbeatConfig = {
+      EnableHeartbeat        = true
+      HeartbeatFrequency     = 300
+      HeartbeatSchema        = "public"
+    }
+    # Se o slot for invalidado mesmo assim, faz recover automatico
+    # com reload da tabela ao inves de parar com FATAL_ERROR.
+    ErrorBehavior = {
+      RecoverableErrorStopRetryAfterThrottlingMax = true
+      RecoverableErrorThrottlingMax               = 1800
+      TableErrorEscalationPolicy                  = "STOP_TASK"
+      DataTruncationErrorPolicy                   = "LOG_ERROR"
+      RecoverableErrorInterval                    = 5
+      RecoverableErrorCount                       = 0
+    }
   })
 
   start_replication_task = true

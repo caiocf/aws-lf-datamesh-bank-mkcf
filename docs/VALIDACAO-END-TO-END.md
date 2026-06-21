@@ -251,14 +251,14 @@ aws glue get-job-runs --job-name lfmesh-dev-riscos-streaming-to-bronze --max-ite
 
 ### Resultado esperado
 
-- State: `RUNNING` (job de streaming fica ativo ate o timeout)
+- State: `RUNNING` (job de streaming roda continuamente com timeout=0)
 - ExecutionTime crescendo continuamente
-- Timeout: 60 minutos (apos timeout, watchdog reinicia)
+- Timeout: 0 (ilimitado — recomendacao AWS para streaming jobs)
 
 ### Resultado obtido
 
 ```json
-{ "State": "RUNNING", "ExecutionTime": 1910, "Timeout": 60 }
+{ "State": "RUNNING", "ExecutionTime": 1910, "Timeout": 0 }
 ```
 
 ### Screenshot
