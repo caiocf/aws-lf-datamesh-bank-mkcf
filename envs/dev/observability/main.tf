@@ -13,6 +13,14 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+# Apply contas first. Read the current DMS IDs instead of a hard-coded task ID.
+data "terraform_remote_state" "contas" {
+  backend = "local"
+  config = {
+    path = "${path.module}/../domains/contas/terraform.tfstate"
+  }
+}
+
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
   account_id  = data.aws_caller_identity.current.account_id
@@ -64,11 +72,11 @@ module "observability_central" {
       lambda_function_names = [
         "${local.name_prefix}-contas-db-seed"
       ]
-      glue_workflow_name      = "${local.name_prefix}-contas-pipeline"
-      gold_bucket_name        = "${local.name_prefix}-contas-gold-${local.account_id}"
-      enable_dms              = true
-      dms_replication_task_id = "${local.name_prefix}-contas-dms"
-      rds_instance_id         = "${local.name_prefix}-contas-db"
+      glue_workflow_name       = "${local.name_prefix}-contas-pipeline"
+      gold_bucket_name         = "${local.name_prefix}-contas-gold-${local.account_id}"
+      enable_dms               = true
+      dms_replication_task_id  = "${local.name_prefix}-contas-dms"
+      rds_instance_id          = "${local.name_prefix}-contas-db"
       rds_allocated_storage_gb = 30
     }
 
@@ -181,9 +189,10 @@ module "observability_contas" {
   glue_workflow_name = "${local.name_prefix}-contas-pipeline"
   gold_bucket_name   = "${local.name_prefix}-contas-gold-${local.account_id}"
 
-  enable_dms_alarms          = true
-  dms_replication_task_id     = "${local.name_prefix}-contas-dms"
-  dms_replication_task_cw_id  = "DD5O6HISLNABJFK7TJWYERVKRU"
+  enable_dms_alarms = try(data.terraform_remote_state.contas.outputs.dms_monitoring, null) != null
+  # This module's legacy task_id input represents the instance dimension.
+  dms_replication_task_id    = try(data.terraform_remote_state.contas.outputs.dms_monitoring.instance_id, "")
+  dms_replication_task_cw_id = try(data.terraform_remote_state.contas.outputs.dms_monitoring.task_cw_id, "")
 }
 
 module "observability_transacoes" {
@@ -208,10 +217,10 @@ module "observability_transacoes" {
   glue_workflow_name = "${local.name_prefix}-transacoes-pipeline"
   gold_bucket_name   = "${local.name_prefix}-transacoes-gold-${local.account_id}"
 
-  enable_msk_alarms    = true
-  msk_cluster_name     = "${local.name_prefix}-transacoes-msk"
-  msk_consumer_group   = "connect-${local.name_prefix}-transacoes-s3-sink"
-  msk_topic            = "txn.transacoes.raw"
+  enable_msk_alarms  = true
+  msk_cluster_name   = "${local.name_prefix}-transacoes-msk"
+  msk_consumer_group = "connect-${local.name_prefix}-transacoes-s3-sink"
+  msk_topic          = "txn.transacoes.raw"
 
   enable_msk_connect_alarms = true
   msk_connector_name        = "${local.name_prefix}-transacoes-s3-sink"
@@ -240,10 +249,10 @@ module "observability_riscos" {
   glue_workflow_name = "${local.name_prefix}-riscos-pipeline"
   gold_bucket_name   = "${local.name_prefix}-riscos-gold-${local.account_id}"
 
-  enable_msk_alarms    = true
-  msk_cluster_name     = "${local.name_prefix}-riscos-msk"
-  msk_consumer_group   = ""
-  msk_topic            = "txn.riscos.raw"
+  enable_msk_alarms  = true
+  msk_cluster_name   = "${local.name_prefix}-riscos-msk"
+  msk_consumer_group = ""
+  msk_topic          = "txn.riscos.raw"
 
   enable_glue_streaming_alarms = true
   glue_streaming_job_name      = "${local.name_prefix}-riscos-streaming-to-bronze"

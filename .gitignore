@@ -32,6 +32,10 @@ terraform.tfvars
 # Arquivos temporários
 response.json
 
+# Caches Python
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store
 Thumbs.db

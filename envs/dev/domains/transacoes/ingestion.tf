@@ -115,6 +115,9 @@ resource "aws_security_group" "msk" {
 }
 
 resource "aws_security_group" "lambda" {
+  # Keep Lambda ENI cleanup permissions until the VPC interfaces are released.
+  depends_on = [aws_iam_role_policy_attachment.lambda_producer_vpc]
+
   name        = "${local.name_prefix}-lambda-sg"
   description = "SG para Lambda producer do dominio transacoes"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
@@ -778,15 +781,17 @@ resource "aws_glue_job" "silver_to_gold" {
 }
 
 resource "aws_glue_workflow" "transacoes_pipeline" {
-  name = "${local.name_prefix}-pipeline"
-  tags = { Domain = "transacoes", Layer = "orchestration" }
+  name                = "${local.name_prefix}-pipeline"
+  max_concurrent_runs = 1
+  tags                = { Domain = "transacoes", Layer = "orchestration" }
 }
 
 resource "aws_glue_trigger" "scheduled_start" {
-  name          = "${local.name_prefix}-hourly"
-  type          = "SCHEDULED"
-  schedule      = "cron(0 * * * ? *)"
-  enabled       = true
+  name     = "${local.name_prefix}-hourly"
+  type     = "SCHEDULED"
+  schedule = "cron(0 * * * ? *)"
+  # The producer Lambda starts this workflow; avoid a duplicate hourly start.
+  enabled       = false
   workflow_name = aws_glue_workflow.transacoes_pipeline.name
   actions {
     job_name = aws_glue_job.bronze_to_silver.name

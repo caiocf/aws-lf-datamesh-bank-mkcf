@@ -19,20 +19,18 @@ resource "aws_cloudwatch_metric_alarm" "glue_job_failed" {
   for_each = toset(var.glue_job_names)
 
   alarm_name          = "${local.name_prefix}-glue-${each.key}-failed"
-  alarm_description   = "Glue Job ${each.key} falhou no domínio ${var.domain}."
+  alarm_description   = "Glue Job ${each.key}: evento final FAILED, TIMEOUT, ERROR ou STOPPED nos ultimos 5 minutos."
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
-  metric_name         = "glue.driver.aggregate.numFailedTasks"
-  namespace           = "Glue"
+  metric_name         = "JobFailures"
+  namespace           = "${var.project_name}-${var.environment}/Glue"
   period              = 300
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    JobName  = each.key
-    JobRunId = "ALL"
-    Type     = "count"
+    JobName = each.key
   }
 
   alarm_actions = [var.sns_topic_arn_critical]
