@@ -1,4 +1,6 @@
 import sys
+import time
+import uuid
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
@@ -18,6 +20,25 @@ SALT = "lfmesh-clientes-2026"
 source_path = f"s3://{args['source_bucket']}/{args['source_prefix']}/"
 target_path = f"s3://{args['target_bucket']}/{args['target_prefix']}/"
 
+# Materialize only non-PII enrichment aggregates outside the published prefix.
+# Durable checkpoints prevent joins/count/write from rereading overwritten files.
+sc.setCheckpointDir(f"s3://{args['target_bucket']}/_checkpoints/clientes-enrichment/{uuid.uuid4().hex}/")
+
+
+def stable_aggregate(path, aggregate):
+    for attempt in range(3):
+        try:
+            spark.catalog.refreshByPath(path)
+            return aggregate(spark.read.parquet(path)).checkpoint(eager=True)
+        except Exception as exc:
+            missing = any(text in str(exc) for text in (
+                "File not present on S3", "FileNotFoundException", "PATH_NOT_FOUND"
+            ))
+            if not missing or attempt == 2:
+                raise
+            print(f"Fonte em atualizacao; repetindo snapshot {attempt + 1}/2: {path}")
+            time.sleep(5)
+
 # Lê silver clientes (particionado por pais)
 df = spark.read.option("basePath", source_path).parquet(source_path)
 print(f"Silver clientes: {df.count()} registros")
@@ -36,10 +57,8 @@ prefix = f"lfmesh-dev"
 # Contas: total de contas ativas por cliente
 try:
     contas_path = f"s3://{prefix}-contas-gold-{account_id}/contas_ativas/"
-    df_contas = spark.read.parquet(contas_path)
-
-    df_contas_agg = (
-        df_contas.groupBy("cliente_id")
+    df_contas_agg = stable_aggregate(contas_path, lambda data:
+        data.groupBy("cliente_id")
         .agg(F.count("conta_id").alias("total_contas"))
     )
     print(f"Contas ativas: {df_contas_agg.count()} clientes com contas")
@@ -50,10 +69,8 @@ except Exception as e:
 # Transacoes: volume total e ultima transacao por cliente
 try:
     txn_path = f"s3://{prefix}-transacoes-gold-{account_id}/transacoes_curated/"
-    df_txn = spark.read.parquet(txn_path)
-
-    df_txn_agg = (
-        df_txn.groupBy("cliente_id")
+    df_txn_agg = stable_aggregate(txn_path, lambda data:
+        data.groupBy("cliente_id")
         .agg(
             F.sum("valor").alias("volume_transacoes"),
             F.max("data_transacao").alias("ultima_transacao")
@@ -67,10 +84,8 @@ except Exception as e:
 # Riscos: max score_risco por cliente (pior caso)
 try:
     riscos_path = f"s3://{prefix}-riscos-gold-{account_id}/alertas_fraude/"
-    df_riscos = spark.read.parquet(riscos_path)
-
-    df_riscos_agg = (
-        df_riscos.groupBy("cliente_id")
+    df_riscos_agg = stable_aggregate(riscos_path, lambda data:
+        data.groupBy("cliente_id")
         .agg(F.max("score_risco").alias("score_risco_raw"))
         .withColumn("score_risco", F.col("score_risco_raw").cast("string"))
         .drop("score_risco_raw")

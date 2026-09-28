@@ -107,26 +107,17 @@ resource "aws_iam_role" "consumer" {
 
 data "aws_iam_policy_document" "consumer_access" {
   statement {
-    sid = "AthenaQueryAccess"
+    sid = "AthenaCatalogAndDiscoveryAccess"
 
     actions = [
-      "athena:BatchGetQueryExecution",
       "athena:GetDatabase",
       "athena:GetDataCatalog",
-      "athena:GetNamedQuery",
-      "athena:GetQueryExecution",
-      "athena:GetQueryResults",
       "athena:GetTableMetadata",
-      "athena:GetWorkGroup",
       "athena:ListDataCatalogs",
       "athena:ListDatabases",
       "athena:ListEngineVersions",
-      "athena:ListNamedQueries",
-      "athena:ListQueryExecutions",
       "athena:ListTableMetadata",
-      "athena:ListWorkGroups",
-      "athena:StartQueryExecution",
-      "athena:StopQueryExecution"
+      "athena:ListWorkGroups"
     ]
 
     resources = ["*"]
@@ -166,11 +157,45 @@ data "aws_iam_policy_document" "consumer_access" {
     sid = "AthenaResultsBucketAccess"
 
     actions = [
-      "s3:GetBucketLocation",
-      "s3:ListBucket"
+      "s3:GetBucketLocation"
     ]
 
     resources = [aws_s3_bucket.athena_results.arn]
+  }
+
+}
+
+# Each persona can run queries only in its workgroup and access only its results.
+# Keep catalog discovery in the shared policy; Lake Formation governs source data.
+data "aws_iam_policy_document" "consumer_persona_access" {
+  for_each = var.consumer_personas
+
+  statement {
+    sid = "AthenaWorkgroupAccess"
+    actions = [
+      "athena:BatchGetQueryExecution",
+      "athena:GetNamedQuery",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:GetWorkGroup",
+      "athena:ListNamedQueries",
+      "athena:ListQueryExecutions",
+      "athena:StartQueryExecution",
+      "athena:StopQueryExecution"
+    ]
+    resources = [aws_athena_workgroup.consumer[each.key].arn]
+  }
+
+  statement {
+    sid       = "AthenaResultsListOwnPrefix"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.athena_results.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["${each.key}/", "${each.key}/*"]
+    }
   }
 
   statement {
@@ -183,8 +208,24 @@ data "aws_iam_policy_document" "consumer_access" {
       "s3:PutObject"
     ]
 
-    resources = ["${aws_s3_bucket.athena_results.arn}/*"]
+    resources = ["${aws_s3_bucket.athena_results.arn}/${each.key}/*"]
   }
+}
+
+resource "aws_iam_policy" "consumer_persona_access" {
+  for_each = var.consumer_personas
+
+  name        = "${local.name_prefix}-consumer-${each.key}-athena-results"
+  description = "Athena workgroup and result prefix access for ${each.key}."
+  policy      = data.aws_iam_policy_document.consumer_persona_access[each.key].json
+  tags        = merge(local.default_tags, { Persona = each.key })
+}
+
+resource "aws_iam_role_policy_attachment" "consumer_persona_access" {
+  for_each = aws_iam_role.consumer
+
+  role       = each.value.name
+  policy_arn = aws_iam_policy.consumer_persona_access[each.key].arn
 }
 
 resource "aws_iam_policy" "consumer_access" {

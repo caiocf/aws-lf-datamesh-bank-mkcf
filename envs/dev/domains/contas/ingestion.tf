@@ -76,6 +76,9 @@ resource "aws_security_group" "rds" {
 }
 
 resource "aws_security_group" "lambda_seed" {
+  # Keep Lambda ENI cleanup permissions until the VPC interfaces are released.
+  depends_on = [aws_iam_role_policy_attachment.lambda_seed_vpc]
+
   name        = "${local.name_prefix}-lambda-seed-sg"
   description = "SG para a Lambda seed do dominio contas"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
@@ -118,7 +121,7 @@ resource "aws_db_parameter_group" "contas" {
 
   # Limita WAL retido por replication slot para evitar storage-full.
   # Se DMS ficar offline e acumular >10GB de WAL, o slot e invalidado
-  # e o DMS refaz full-load (instantaneo para 10 rows).
+  # e a recuperacao exige uma nova carga completa (reload-target).
   parameter {
     name         = "max_slot_wal_keep_size"
     value        = "10240"
@@ -278,6 +281,9 @@ resource "aws_dms_endpoint" "source_postgres" {
   database_name = local.db_name
   ssl_mode      = "require"
 
+  # PostgreSQL heartbeat is an endpoint setting; frequency is in minutes.
+  extra_connection_attributes = "heartbeatEnable=true;heartbeatFrequency=5;heartbeatSchema=public;"
+
   secrets_manager_access_role_arn = aws_iam_role.dms_secrets_access.arn
   secrets_manager_arn             = aws_secretsmanager_secret.db_credentials.arn
 
@@ -369,16 +375,8 @@ resource "aws_dms_replication_task" "contas_cdc" {
     Logging = {
       EnableLogging = true
     }
-    # Heartbeat evita que o replication slot seja invalidado por inatividade.
-    # Grava heartbeat a cada 5 min no schema awsdms_heartbeat, mantendo
-    # o slot ativo e o WAL position avancando mesmo sem changes na tabela fonte.
-    HeartbeatConfig = {
-      EnableHeartbeat        = true
-      HeartbeatFrequency     = 300
-      HeartbeatSchema        = "public"
-    }
-    # Se o slot for invalidado mesmo assim, faz recover automatico
-    # com reload da tabela ao inves de parar com FATAL_ERROR.
+    # Heartbeat is configured on source_postgres above.
+    # An invalidated WAL slot requires a new full load; retries cannot restore WAL.
     ErrorBehavior = {
       RecoverableErrorStopRetryAfterThrottlingMax = true
       RecoverableErrorThrottlingMax               = 1800

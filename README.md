@@ -144,7 +144,9 @@ Matriz de acesso nos data products gold:
 | `transacoes_curated` | filtrado (BR) | filtrado (BR) | DESCRIBE apenas | filtrado (BR) | full |
 | `alertas_fraude` | filtrado (sem score_risco, BR) | DESCRIBE apenas | DESCRIBE apenas | filtrado (BR) | full |
 
-Todas as roles usam workgroups Athena dedicados (`lfmesh-dev-<persona>`) com resultados isolados no bucket `lfmesh-dev-athena-results`.
+Cada role consumidora pode executar consultas e acessar historico/resultados somente no workgroup `lfmesh-dev-<persona>`. A politica especifica da persona permite listar, ler e gravar somente seu prefixo `<persona>/` no bucket `lfmesh-dev-athena-results-<ACCOUNT_ID>`. A politica compartilhada mantem descoberta de catalogos e workgroups; por isso nomes de outros workgroups podem aparecer no console, mas seu uso e bloqueado. O Lake Formation continua controlando o acesso aos dados de origem.
+
+O isolamento depende de nao conceder permissoes adicionais amplas a essas roles ou ao bucket. Consulte o teste reproduzivel em [docs/VALIDACAO-END-TO-END.md](docs/VALIDACAO-END-TO-END.md#isolamento-de-workgroups-e-resultados-athena).
 
 ### Usuarios e aplicacoes simulados (`consumer-roles`)
 
@@ -226,37 +228,70 @@ Esse estado prepara a rede compartilhada do lab para os dominios conectados a VP
 
 ### 4. Dominios
 
-Ordem alinhada com o estado atual do repositorio:
+Depois de `consumer-roles`, `foundation` e `network`, aplique os dominios nesta ordem:
 
-1. `clientes`
-2. `parceiros`
-3. `contas`
-4. `transacoes`
-5. `riscos`
+1. `parceiros`
+2. `contas`
+3. `transacoes`
+4. `riscos`
+5. `clientes`
+
+`clientes` fica por ultimo porque concede permissoes Lake Formation sobre `dev_gold_contas.contas_ativas`, `dev_gold_transacoes.transacoes_curated` e `dev_gold_riscos.alertas_fraude`. Esses databases e tabelas precisam existir no Glue Data Catalog antes dos grants; nao precisam conter dados. Aplicar `clientes` antes desses catalogos causa `Table not found`.
+
+Na raiz do repositorio, depois de preparar o `terraform.tfvars` de cada dominio a partir do respectivo exemplo (sem sobrescrever configuracoes existentes), use:
+
+```bash
+make init-domains
+make plan-domains
+make apply-domains
+```
+
+O Makefile executa os dominios sequencialmente na ordem acima, interrompe no primeiro erro e por padrao mantem a confirmacao interativa de cada `terraform apply`. Os alvos `init-domain`, `plan-domain` e `apply-domain` sem `DOMAIN` tambem executam todos os dominios. Esses comandos nao criam as camadas previas nem a observabilidade.
+
+Para aplicar os dominios sem confirmacao interativa, habilite explicitamente a opcao:
+
+```bash
+make apply-domains AUTO_APPROVE=true
+```
+
+`AUTO_APPROVE` e `false` por padrao. Com `true`, dispensa a confirmacao do Terraform em `apply-domains` e `apply-domain`, por exemplo `make apply-domain DOMAIN=clientes AUTO_APPROVE=true`. Nesses alvos, aprova todas as acoes do plano, incluindo eventuais alteracoes e exclusoes, e nao reutiliza o plano exibido anteriormente por `make plan-domains`.
+
+A mesma opcao dispensa a confirmacao `DESTRUIR` do script em `cleanup`, `cleanup-windows` e `destroy-domain`, autorizando a limpeza completa ou do dominio selecionado. Os demais alvos do Makefile nao usam `AUTO_APPROVE`.
+
+Para operar apenas um dominio, informe `DOMAIN` explicitamente:
+
+```bash
+make plan-domain DOMAIN=clientes
+make apply-domain DOMAIN=clientes
+```
+
+Se `clientes` ja foi parcialmente criado e faltaram apenas os grants, crie os dominios dependidos e execute novamente seu `plan/apply`; nao e necessario destruir os recursos existentes.
+
+Para deploy manual, partindo de `envs/dev/network`:
+
+```bash
+cd ../domains/parceiros
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+Repita nos demais dominios seguindo a ordem acima. Os comandos detalhados de deploy, validacao e destruicao estao em [docs/DEPLOY.md](docs/DEPLOY.md).
+
+Nos dominios `clientes` e `parceiros`, o `terraform apply` tambem faz uma invocacao inicial da Lambda de ingestao/orquestracao para iniciar o primeiro `Glue Workflow` sem depender do schedule diario.
 
 ### 5. Observabilidade
 
+Depois do ultimo dominio, partindo de `envs/dev/domains/clientes`:
+
 ```bash
-cd ../observability
+cd ../../observability
 cp terraform.tfvars.example terraform.tfvars
 terraform init
 terraform apply
 ```
 
 Cria alarmes, SNS topics e dashboard CloudWatch consolidado. Deve ser aplicada apos os dominios para que as metricas referenciadas existam. Detalhes em [docs/OBSERVABILIDADE.md](docs/OBSERVABILIDADE.md).
-
-Exemplo:
-
-```bash
-cd ../domains/clientes
-cp terraform.tfvars.example terraform.tfvars
-terraform init
-terraform apply
-```
-
-Repita para os demais dominios. Para `contas`, `transacoes` e `riscos`, o `plan/apply` individual continua funcionando, desde que `envs/dev/network` ja tenha sido aplicado antes. Os comandos detalhados de deploy, validacao e destruicao estao em [docs/DEPLOY.md](docs/DEPLOY.md).
-
-Nos dominios `clientes` e `parceiros`, o `terraform apply` agora tambem faz uma invocacao inicial da Lambda de ingestao/orquestracao para iniciar o primeiro `Glue Workflow` sem depender do schedule diario.
 
 ## Validacao no Athena
 
@@ -296,7 +331,7 @@ Use [docs/CUSTOS.md](docs/CUSTOS.md) como referencia principal de custo e deslig
 
 ## Limpeza
 
-Para remover tudo na ordem correta:
+Para remover tudo na ordem correta (requer Python 3.9+, AWS CLI e Terraform):
 
 ```bash
 # Linux / Mac
@@ -309,7 +344,9 @@ cleanup.bat
 make cleanup
 ```
 
-> **Observacao sobre tempo de execucao:** O script de limpeza pode demorar bastante (30-60 minutos) devido a exclusao de recursos como RDS, MSK e buckets S3 com muitos arquivos. Se a etapa de exclusao de buckets S3 estiver demorando, voce pode acessar o console AWS (S3 > selecionar bucket > Empty > Delete) para esvaziar manualmente enquanto o script roda — isso acelera o processo. O script e idempotente: se cancelar e rodar novamente, ele continua de onde parou sem problemas.
+O fluxo comum em `scripts/cleanup-lab.py` para agendamentos, aguarda Glue/DMS/MSK Connect encerrarem e remove objetos, versoes antigas e delete markers em lotes de ate 1.000. A exclusao dos buckets fica com o Terraform. Erros de acesso, exclusoes parciais e timeout interrompem a limpeza com erro; o script nao anuncia sucesso sem verificar. Nao execute dois destroys simultaneos nem remova locks de um Terraform ativo.
+
+RDS e MSK ainda podem levar varios minutos para serem excluidos. Para automacao ja autorizada, use `make cleanup AUTO_APPROVE=true`. Em destruicao parcial, execute novamente depois de confirmar que a execucao anterior terminou.
 
 Para destruir apenas um dominio:
 
@@ -317,7 +354,7 @@ Para destruir apenas um dominio:
 make destroy-domain DOMAIN=clientes
 ```
 
-No caso de `riscos`, o `Makefile` ja tenta pausar schedules e parar o Glue Streaming antes do `destroy`.
+`destroy-domain` usa o mesmo fluxo, limitado aos nomes do dominio e da conta autenticada. A limpeza nao forca detach de interfaces de rede; o Terraform remove primeiro os servicos proprietarios.
 
 Se voce estiver fazendo limpeza completa do ambiente, destrua a camada `network` apenas depois de remover `contas`, `transacoes` e `riscos`.
 

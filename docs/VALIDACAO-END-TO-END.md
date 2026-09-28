@@ -296,3 +296,56 @@ Salvar na pasta `docs/evidencias/`:
 | ![](evidencias/glue-workflow-clientes.png) | Console Glue - Workflows - lfmesh-dev-clientes-pipeline - ultima run COMPLETED (grafo) |
 | ![](evidencias/msk-connect-running.png) | Console MSK - Connectors - lfmesh-dev-transacoes-s3-sink - status Running |
 | ![](evidencias/glue-streaming-riscos.png) | Console Glue - Jobs - lfmesh-dev-riscos-streaming-to-bronze - Runs - run ativa |
+
+
+## Isolamento de workgroups e resultados Athena
+
+A foundation concede acesso ao workgroup e ao prefixo S3 de cada persona. A listagem de nomes de workgroups permanece permitida; isso nao autoriza consultar em outro workgroup. Teste com credenciais das roles consumidoras, pois um administrador pode ter acesso a todos os workgroups.
+
+Teste de integracao reproduzivel (Python 3 e AWS CLI), executado na raiz do repositorio:
+
+```powershell
+python tests/athena_isolation.py --account <ACCOUNT_ID> --bucket lfmesh-dev-athena-results-<ACCOUNT_ID>
+```
+
+As credenciais iniciais precisam poder assumir `lfmesh-dev-consumer-bi` e `lfmesh-dev-consumer-auditoria`, e a confianca dessas roles deve permitir o principal inicial. O script mantem as credenciais temporarias apenas em memoria. Aceita `--region` e `--prefix` para ambientes diferentes.
+
+O teste executa `SELECT 1` em cada workgroup, verifica o destino S3, le o proprio resultado e verifica acesso negado nos dois sentidos para:
+
+- Detalhes, historico e execucao de consultas no workgroup da outra persona.
+- Metadados e resultados de uma consulta da outra persona.
+- Listagem, leitura e escrita no prefixo S3 da outra persona.
+
+As consultas nao leem tabelas de negocio. Seus pequenos resultados permanecem no S3 como evidencia. A tentativa de escrita cruzada usa apenas texto sintetico e deve ser negada. Esse teste valida isolamento Athena/S3; nao substitui os testes de filtros Lake Formation acima.
+
+
+### Evidencia da validacao de isolamento
+
+Aplicacao na conta `978473717587`, regiao `us-east-1`: 10 recursos adicionados (cinco politicas e cinco vinculos), uma politica compartilhada atualizada e nenhum recurso destruido. O teste terminou com 18 verificacoes aprovadas: dois fluxos positivos e 16 negativas de acesso cruzado.
+
+| Role | QueryExecutionId de SELECT 1 | Resultado |
+|---|---|---|
+| `lfmesh-dev-consumer-bi` | `e002a24e-3dcf-4094-8147-ba76a0281276` | SUCCEEDED; resultado proprio acessivel |
+| `lfmesh-dev-consumer-auditoria` | `0adc92eb-39de-4870-ac7d-1831981ec2b1` | SUCCEEDED; resultado proprio acessivel |
+
+As outras tres personas recebem a mesma estrutura de politica parametrizada; os testes com sessoes reais foram feitos especificamente com BI e auditoria.
+
+
+## Regressao: merge CDC de contas com Silver existente
+
+O job Bronze -> Silver primeiro grava o merge completo em um prefixo exclusivo `/_staging/`, fora de `contas/`. Depois le esse resultado independente e substitui a Silver, valida a contagem e confirma o bookmark. Isso evita apagar os arquivos que o proprio merge ainda precisa ler. Staging e removido somente apos o sucesso; falhas preservam o staging para diagnostico/recuperacao. Erros de leitura da Silver nao sao mais tratados genericamente como primeira execucao.
+
+A substituicao de Parquet no S3 continua nao atomica. Leitores concorrentes podem observar a troca e uma falha durante a publicacao exige recuperacao. Nao execute produtores concorrentes no mesmo destino. A role do job precisa de leitura/escrita/exclusao no staging (a politica atual cobre o bucket Silver).
+
+A falha original deixou a Silver vazia e o retry publicou 23 registros, contra 25 calculados antes da falha. A correcao do script nao recupera automaticamente registros ausentes nem reseta bookmarks. Uma recuperacao completa precisa ser planejada antes de regravar o destino usado pelos consumidores.
+
+Para testar sem alterar dados em uso, copie a Silver para um prefixo exclusivo `/_validation/`, execute o job com `--target_prefix` apontando para essa copia e `--job-bookmark-option=job-bookmark-disable` somente nessa execucao. Verifique que os logs mostram Silver existente, merge concluido e SUCCEEDED. A execucao isolada nao atualiza a Gold nem o bookmark de producao.
+
+Validacao executada: `jr_5af9e187caf50e923b005a21f841a0400ac77f2bc71670a0ec309a5909c56914` terminou SUCCEEDED. Leu 64 eventos do Bronze e 23 registros da copia Silver existente; gravou e validou 25 registros em `_validation/cdc-fix-88475a649b344735b8109671cf4b1046/contas/`. O bookmark permaneceu na versao 13, run `jr_cf39e57120a13925f6410e66ad0efa7c376f5ab2df0027b674c35adb3d8d3182`. O resultado isolado foi mantido para recuperacao revisada; a Silver/Gold de producao nao foi substituida por esse teste.
+
+
+## Concorrencia do pipeline transacoes
+
+O workflow limita `max_concurrent_runs` a 1. A Lambda publica Kafka antes de tentar iniciar o workflow e trata somente `ConcurrentRunsExceededException` como disparo dispensado. Nao ha fila de execucoes rejeitadas: a proxima invocacao periodica tenta novamente, e os arquivos ainda nao processados permanecem no Bronze para o bookmark. Evite iniciar jobs isolados por fora do workflow.
+
+Teste local: `python -m unittest discover -s tests -p test_transacoes_producer.py`. Cobre inicio normal, concorrencia apos publicacao e propagacao de erros nao relacionados.

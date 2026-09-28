@@ -111,6 +111,15 @@ def generate_transactions(num_transactions):
     return transactions
 
 
+def start_workflow_if_available(glue, workflow_name):
+    # Let Glue enforce the limit atomically; a prior status check would race.
+    try:
+        glue.start_workflow_run(Name=workflow_name)
+    except glue.exceptions.ConcurrentRunsExceededException:
+        return f"Workflow {workflow_name} ja em andamento; novo disparo ignorado"
+    return f"Workflow {workflow_name} disparado"
+
+
 def handler(event, context):
     import time
 
@@ -133,8 +142,8 @@ def handler(event, context):
     if workflow_name:
         time.sleep(10)
         glue = boto3.client('glue')
-        glue.start_workflow_run(Name=workflow_name)
-        print(f"Workflow {workflow_name} disparado")
-        msg += f" | Workflow {workflow_name} disparado"
+        workflow_message = start_workflow_if_available(glue, workflow_name)
+        print(workflow_message)
+        msg += f" | {workflow_message}"
 
     return {"statusCode": 200, "body": msg}

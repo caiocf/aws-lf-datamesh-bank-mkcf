@@ -87,6 +87,9 @@ resource "aws_security_group" "msk_serverless" {
 }
 
 resource "aws_security_group" "lambda" {
+  # Keep Lambda ENI cleanup permissions until the VPC interfaces are released.
+  depends_on = [aws_iam_role_policy_attachment.lambda_producer_vpc]
+
   name        = "${local.name_prefix}-lambda-sg"
   description = "SG para Lambda producer do dominio riscos"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id

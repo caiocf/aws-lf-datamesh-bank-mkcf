@@ -116,6 +116,23 @@ resource "aws_cloudwatch_event_target" "glue_job_failed_log" {
   arn       = aws_cloudwatch_log_group.glue_job_failed.arn
 }
 
+# Count final job failures, not failed Spark tasks. One time series per job.
+resource "aws_cloudwatch_log_metric_filter" "glue_job_failed" {
+  name           = "${local.name_prefix}-glue-job-failures"
+  log_group_name = aws_cloudwatch_log_group.glue_job_failed.name
+  pattern        = "{ ($.source = \"aws.glue\") && ($.detail.jobName = *) && (($.detail.state = \"FAILED\") || ($.detail.state = \"TIMEOUT\") || ($.detail.state = \"ERROR\") || ($.detail.state = \"STOPPED\")) }"
+
+  metric_transformation {
+    name      = "JobFailures"
+    namespace = "${local.name_prefix}/Glue"
+    value     = "1"
+    unit      = "Count"
+    dimensions = {
+      JobName = "$.detail.jobName"
+    }
+  }
+}
+
 # ─── S3 Bucket Metrics: habilita métricas de storage nos buckets gold ─────────
 
 resource "aws_s3_bucket_metric" "gold" {
@@ -186,10 +203,10 @@ EOT
     width  = 24
     height = 5
     properties = {
-      title   = "Glue Jobs — Duração por Job (segundos)"
-      region  = var.aws_region
-      period  = 300
-      stat    = "Maximum"
+      title  = "Glue Jobs — Duração por Job (segundos)"
+      region = var.aws_region
+      period = 300
+      stat   = "Maximum"
       metrics = concat(
         [for m in local.glue_metrics : concat(m.metric, [{ id = m.id, visible = false }])],
         [for e in local.glue_metrics_expressions : [{ expression = e.expression, id = e.id, label = e.label }]]
@@ -205,10 +222,10 @@ EOT
     width  = 12
     height = 5
     properties = {
-      title   = "Glue Jobs — Total Succeeded vs Failed"
-      region  = var.aws_region
-      period  = 300
-      stat    = "Sum"
+      title  = "Glue Jobs — Total Succeeded vs Failed"
+      region = var.aws_region
+      period = 300
+      stat   = "Sum"
       metrics = [
         ["AWS/Events", "MatchedEvents", "RuleName", "${local.name_prefix}-glue-job-succeeded", { label = "Succeeded", color = "#2ca02c" }],
         ["AWS/Events", "MatchedEvents", "RuleName", "${local.name_prefix}-glue-job-failed", { label = "Failed", color = "#d62728" }]
@@ -224,9 +241,9 @@ EOT
     width  = 12
     height = 5
     properties = {
-      title   = "Glue Jobs — SOMENTE os que falharam (nome + estado + horário)"
-      region  = var.aws_region
-      query   = "SOURCE '/aws/events/${local.name_prefix}-glue-job-failed' | fields detail.jobName as job, detail.state as estado, @timestamp as horario | sort @timestamp desc | limit 50"
+      title  = "Glue Jobs — SOMENTE os que falharam (nome + estado + horário)"
+      region = var.aws_region
+      query  = "SOURCE '/aws/events/${local.name_prefix}-glue-job-failed' | fields detail.jobName as job, detail.state as estado, @timestamp as horario | sort @timestamp desc | limit 50"
     }
   }
 
@@ -330,10 +347,10 @@ EOT
     width  = 12
     height = 6
     properties = {
-      title   = "MSK — transacoes: offset-lag (< 100 ok) | riscos: bytes/s (> 0 = producer ativo)"
-      region  = var.aws_region
-      period  = 300
-      stat    = "Maximum"
+      title  = "MSK — transacoes: offset-lag (< 100 ok) | riscos: bytes/s (> 0 = producer ativo)"
+      region = var.aws_region
+      period = 300
+      stat   = "Maximum"
       metrics = concat(
         [for m in local.msk_lag_metrics : concat(m.metric, [{ label = m.label }])],
         [for m in local.msk_bytes_metrics : concat(m.metric, [{ label = m.label }])]
@@ -415,10 +432,10 @@ EOT
     width  = 12
     height = 6
     properties = {
-      title   = "Data Volume — Objetos no Gold (daily) + Requests (real-time)"
-      region  = var.aws_region
-      period  = 86400
-      stat    = "Average"
+      title  = "Data Volume — Objetos no Gold (daily) + Requests (real-time)"
+      region = var.aws_region
+      period = 86400
+      stat   = "Average"
       metrics = concat(
         [for m in local.freshness_metrics : concat(m.metric, [{ label = m.label }])],
         [for m in local.freshness_request_metrics : concat(m.metric, [{ label = m.label, yAxis = "right", stat = "Sum", period = 300 }])]
@@ -427,7 +444,7 @@ EOT
   }
 
   # --- RDS Widget (contas) ---
-  rds_domains = { for k, v in var.domains : k => v if v.enable_dms }
+  rds_domains     = { for k, v in var.domains : k => v if v.enable_dms }
   rds_instance_id = try([for k, v in local.rds_domains : v.rds_instance_id if v.rds_instance_id != ""][0], "${local.name_prefix}-contas-db")
   rds_storage_gb  = try([for k, v in local.rds_domains : v.rds_allocated_storage_gb if v.rds_allocated_storage_gb > 0][0], 30)
 
@@ -438,10 +455,10 @@ EOT
     width  = 24
     height = 6
     properties = {
-      title   = "RDS PostgreSQL — CPU (%) | Conexões | Storage Total vs Livre (GB) | IOPS | Memória Livre (MB)"
-      region  = var.aws_region
-      period  = 300
-      stat    = "Average"
+      title  = "RDS PostgreSQL — CPU (%) | Conexões | Storage Total vs Livre (GB) | IOPS | Memória Livre (MB)"
+      region = var.aws_region
+      period = 300
+      stat   = "Average"
       metrics = [
         ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", local.rds_instance_id, { label = "CPU %", color = "#d62728" }],
         ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", local.rds_instance_id, { label = "Conexões", yAxis = "right" }],

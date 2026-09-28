@@ -312,3 +312,25 @@ Quando migrar para contas separadas:
 6. Logs de longo prazo via subscription filter → conta de log archive
 7. Implementar métricas custom (GoldDataAgeSeconds, RecordsProcessed) via Lambda em cada domínio
 8. Criar composite alarms para correlação cross-domain
+
+
+## IDs DMS no lab local
+
+A observabilidade le `dms_monitoring` do state de `envs/dev/domains/contas` por `terraform_remote_state`. O output exporta o identificador da instancia e a parte final do ARN da tarefa, usada como `ReplicationTaskIdentifier` no CloudWatch. Nao copie IDs internos manualmente para os alarmes.
+
+Aplique `contas` antes de `observability`. Sempre que recriar a tarefa DMS, reaplique a observabilidade para atualizar suas dimensoes; estados separados nao disparam applies automaticamente. Para publicar apenas outputs em um dominio existente, um plano `terraform plan -refresh-only -out=outputs.tfplan` pode ser revisado e aplicado sem modificar os recursos AWS.
+
+Esse caminho de state local corresponde ao lab em uma conta. Em multi-account real, use backend remoto com acesso controlado ou forneca os outputs pelo pipeline. Quando `dms_serverless = true`, o output e nulo e os tres alarmes do DMS provisionado ficam desabilitados; o monitoramento Serverless exige configuracao propria.
+
+
+## Alarmes por estado final do Glue
+
+Os alarmes existentes `*-glue-*-failed` monitoram agora `JobFailures`, namespace `lfmesh-dev/Glue` (parametrizado por projeto/ambiente), com dimensao `JobName`. O EventBridge captura os estados FAILED, TIMEOUT, ERROR e STOPPED e os grava no log de falhas; um metric filter converte cada evento em valor 1. Uma soma >= 1 em um periodo de 300 segundos leva o alarme a ALARM. SUCCEEDED/RUNNING nao contam. STOPPED tambem alerta, inclusive em parada manual.
+
+Os nomes e destinos SNS dos alarmes foram preservados. Ausencia de eventos e tratada como nao violacao: o alarme volta a OK apos a janela de avaliacao deixar de conter falhas, sem exigir um novo job bem-sucedido. A entrega e avaliacao sao assincronas. Eventos antigos nao sao reprocessados automaticamente pelo filtro. Uma mudanca para OK nao comprova recuperacao dos dados.
+
+Historico: na falha `jr_e4b95c5359533766f467f018413ed8197192d7fd09d2c3f8c9cd1166a1e073ea`, o EventBridge registrou FAILED, mas o alarme antigo, baseado em `glue.driver.aggregate.numFailedTasks`, nao mudou para ALARM. Falhas internas de tarefas Spark nao equivalem ao estado final do job.
+
+Validacao: a API TestMetricFilter confirmou correspondencia para FAILED/TIMEOUT/ERROR/STOPPED e exclusao de SUCCEEDED/RUNNING. Um evento sintetico identificado com `validation: true` e `jobRunId: synthetic-validation-only` foi publicado no stream `validation-alarm-a8f7d08b7e334fc988ff42b5ca437299` para testar log -> metrica -> alarme, sem executar um job com falha. A etapa anterior EventBridge -> log ja havia sido comprovada pelo evento real.
+
+O topico SNS critico estava sem assinantes na validacao. O alarme visual funciona sem assinatura; notificacao por e-mail exige cadastrar e confirmar um destinatario. Em multi-account real, o log/filtro e os alarmes precisam estar na mesma conta/regiao, ou ter encaminhamento e configuracao cross-account explicitos. O lab atual executa essa cadeia na mesma conta.

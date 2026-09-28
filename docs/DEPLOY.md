@@ -73,31 +73,30 @@ Importante:
 
 Esta e a ordem alinhada com o estado atual do projeto e com o plano de ingestao:
 
-1. `clientes`
-2. `parceiros`
-3. `contas`
-4. `transacoes`
-5. `riscos`
+1. `parceiros`
+2. `contas`
+3. `transacoes`
+4. `riscos`
+5. `clientes`
 
-### 5.1 clientes
+`clientes` concede permissoes sobre as tabelas gold de `contas`, `transacoes` e `riscos`. Esses catalogos precisam existir antes dos grants, mesmo sem dados; caso contrario, o apply retorna `Table not found`.
 
-```powershell
-Set-Location ../domains/clientes
-Copy-Item terraform.tfvars.example terraform.tfvars
-terraform init
-terraform apply
+Como alternativa aos comandos manuais abaixo, prepare os arquivos `terraform.tfvars` de cada dominio e execute, na raiz do repositorio, `make init-domains`, `make plan-domains` e `make apply-domains`. O Makefile respeita essa ordem, para no primeiro erro e por padrao solicita confirmacao em cada apply. As camadas `consumer-roles`, `foundation` e `network` devem estar prontas antes. Para um unico dominio, use por exemplo `make apply-domain DOMAIN=clientes`.
+
+Para aplicar os dominios sem confirmacao interativa, habilite explicitamente a opcao:
+
+```bash
+make apply-domains AUTO_APPROVE=true
 ```
 
-Observacao:
+`AUTO_APPROVE` e `false` por padrao. Com `true`, dispensa a confirmacao do Terraform em `apply-domains` e `apply-domain`, por exemplo `make apply-domain DOMAIN=clientes AUTO_APPROVE=true`. Nesses alvos, aprova todas as acoes do plano, incluindo eventuais alteracoes e exclusoes, e nao reutiliza o plano exibido anteriormente por `make plan-domains`.
 
-- o deploy cria `EventBridge`, uma Lambda orquestradora e o workflow Glue
-- o `terraform apply` invoca a Lambda uma vez para disparar a primeira execucao
-- depois disso, o schedule diario passa a chamar a Lambda, que por sua vez executa `StartWorkflowRun`
+A mesma opcao dispensa a confirmacao `DESTRUIR` do script em `cleanup`, `cleanup-windows` e `destroy-domain`, autorizando a limpeza completa ou do dominio selecionado. Os demais alvos do Makefile nao usam `AUTO_APPROVE`.
 
-### 5.2 parceiros
+### 5.1 parceiros
 
 ```powershell
-Set-Location ../parceiros
+Set-Location ../domains/parceiros
 Copy-Item terraform.tfvars.example terraform.tfvars
 terraform init
 terraform apply
@@ -110,7 +109,7 @@ Observacao:
 - o `terraform apply` invoca a Lambda uma vez para semear a primeira carga
 - depois disso, o schedule diario continua disparando a Lambda, que grava no bronze e inicia o workflow
 
-### 5.3 contas
+### 5.2 contas
 
 ```powershell
 Set-Location ../contas
@@ -125,7 +124,7 @@ Observacao:
 - a Lambda seed executa dentro da VPC compartilhada (via `network`) para conectar ao RDS de forma privada
 - o deploy demora mais do que `clientes` e `parceiros`
 
-### 5.4 transacoes
+### 5.3 transacoes
 
 ```powershell
 Set-Location ../transacoes
@@ -137,9 +136,11 @@ terraform apply
 Observacao:
 
 - este dominio cria `MSK Provisioned`, `MSK Connect`, `Secrets Manager`, `KMS` e jobs Glue
-- apos o deploy, o producer roda a cada 5 minutos e o workflow roda de hora em hora
+- apos o deploy, o producer roda a cada 5 minutos e inicia o workflow; o trigger horario do Glue fica desativado para evitar disparos duplicados
+- o workflow de transacoes permite uma execucao por vez (`max_concurrent_runs = 1`); se estiver ocupado, a Lambda mantem a publicacao Kafka e ignora apenas o novo disparo. O proximo agendamento tenta novamente. Outros erros continuam sendo reportados
+- o limite vale para execucoes do workflow; evite iniciar jobs individuais manualmente em paralelo, pois isso contorna a protecao do pipeline
 
-### 5.5 riscos
+### 5.4 riscos
 
 ```powershell
 Set-Location ../riscos
@@ -154,6 +155,21 @@ Observacao:
 - o producer roda a cada 5 minutos
 - a Lambda `lfmesh-dev-riscos-start-streaming-job` roda a cada 15 minutos como watchdog
 - o job `lfmesh-dev-riscos-streaming-to-bronze` e iniciado automaticamente no deploy
+
+### 5.5 clientes
+
+```powershell
+Set-Location ../clientes
+Copy-Item terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+Observacao:
+
+- o deploy cria `EventBridge`, uma Lambda orquestradora e o workflow Glue
+- o `terraform apply` invoca a Lambda uma vez para disparar a primeira execucao
+- depois disso, o schedule diario passa a chamar a Lambda, que por sua vez executa `StartWorkflowRun`
 
 ## 6. Observabilidade
 
@@ -210,44 +226,24 @@ Resultado esperado no dominio `riscos`:
 
 ## 9. Destruicao
 
-Antes de destruir `riscos`, vale pausar os agendamentos e parar o streaming ativo:
+Use o fluxo comum de limpeza (Python 3.9+, AWS CLI e Terraform):
 
 ```powershell
-aws events disable-rule --name lfmesh-dev-riscos-producer-5min
-aws events disable-rule --name lfmesh-dev-riscos-start-streaming-job-15min
-aws glue get-job-runs --job-name lfmesh-dev-riscos-streaming-to-bronze --max-results 5
-aws glue batch-stop-job-run --job-name lfmesh-dev-riscos-streaming-to-bronze --job-run-ids <job-run-id>
+make cleanup
+# Apenas quando a destruicao ja estiver autorizada:
+make cleanup AUTO_APPROVE=true
+# Um dominio:
+make destroy-domain DOMAIN=riscos
 ```
 
-Depois destrua em ordem reversa:
+O script para agendamentos e escritores (Glue, DMS e MSK Connect), aguarda a parada e esvazia os buckets incluindo todas as versoes e delete markers. A ordem do Terraform e observabilidade, clientes, riscos, transacoes, contas, parceiros, foundation, consumer-roles e network. A limpeza usa os states locais de `envs/<ambiente>` e recusa locks existentes.
+
+`aws s3 rm --recursive` e `aws s3 rb --force` nao removem todas as versoes de buckets versionados. O helper `scripts/empty-lab-buckets.py` usa `VersionId`, lotes de ate 1.000, valida erros individuais e confere se o bucket ficou vazio. Nao force detach de ENIs de servicos ainda ativos.
+
+Para diagnosticar o escopo sem excluir:
 
 ```powershell
-Set-Location envs/dev/observability
-terraform destroy
-
-Set-Location ../domains/riscos
-terraform destroy
-
-Set-Location ../transacoes
-terraform destroy
-
-Set-Location ../contas
-terraform destroy
-
-Set-Location ../parceiros
-terraform destroy
-
-Set-Location ../clientes
-terraform destroy
-
-Set-Location ../../network
-terraform destroy
-
-Set-Location ../foundation
-terraform destroy
-
-Set-Location ../consumer-roles
-terraform destroy
+python scripts/empty-lab-buckets.py --domain riscos
 ```
 
 Se o objetivo for so economizar custo, destruir `transacoes`, `contas` e `riscos` primeiro ja elimina a maior parte do gasto recorrente do lab.
